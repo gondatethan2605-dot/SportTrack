@@ -1,0 +1,71 @@
+# LOT 10 — Mise en ligne gratuite via GitHub Pages.
+#
+# Ce workflow, déclenché au push sur la branche par défaut, construit
+# l'application avec la bonne URL de base (dérivée de l'environnement
+# GITHUB_REPOSITORY : "owner/repo") puis déploie dist/ sur GitHub Pages.
+#
+# Aucun secret n'est stocké ici : les permissions "pages: write" +
+# "id-token: write" sont suffisantes pour le déploiement officiel Pages.
+# L'application reste 100 % côté client (aucun backend, aucune base de
+# données distante, aucune donnée envoyée hors de l'appareil).
+#
+# Job unique : dist/ est gitignoré (jamais commité), donc build puis upload
+# du même artefact dans le même job, sinon le déploiement n'aurait rien.
+
+name: Deploy SportTrack to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+# Un seul déploiement à la fois, et annulation des runs dépassés.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint (TypeScript, no emit)
+        run: npm run lint
+
+      - name: Build (Vite + precache PWA)
+        # Le build calcule `base` depuis GITHUB_REPOSITORY :
+        # l'application sera servie sous https://<user>.github.io/<repo>/.
+        run: npm run build
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

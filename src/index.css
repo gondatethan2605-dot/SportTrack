@@ -1,0 +1,395 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-display: 'Teko', sans-serif;
+    --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+
+    /* ===== LOT 6 — item 16: theme tokens (dark is the default appearance) ===== */
+    --app-bg: #050505;
+    --app-text: #ffffff;
+    --card-fill: rgba(255, 255, 255, 0.04);
+    --card-fill-hover: rgba(255, 255, 255, 0.055);
+    --card-border: rgba(255, 255, 255, 0.10);
+    --card-border-hover: rgba(255, 255, 255, 0.18);
+    --glass-fill: rgba(255, 255, 255, 0.08);
+    --glass-border: rgba(255, 255, 255, 0.12);
+    --input-fill: rgba(255, 255, 255, 0.04);
+    --input-text: #ffffff;
+    --accent-rgb: 139 92 246; /* violet (default brand accent) */
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: var(--app-bg);
+    color: var(--app-text);
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+.font-display {
+  font-family: 'Teko', sans-serif;
+  letter-spacing: 0.04em;
+}
+
+/* Custom subtle scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--app-bg);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--accent-rgb) / 0.5);
+}
+
+::selection {
+  background-color: rgb(var(--accent-rgb) / 0.55);
+  color: #ffffff;
+}
+
+/* Frosted Glass Cards & Elements */
+.sport-card {
+  background: var(--card-fill);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--card-border);
+  border-radius: 1.5rem;
+  transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.sport-card:hover {
+  border-color: var(--card-border-hover);
+  background: var(--card-fill-hover);
+}
+
+.sport-card-active {
+  background: rgb(var(--accent-rgb) / 0.12);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgb(var(--accent-rgb) / 0.35);
+  border-radius: 1.5rem;
+}
+
+.glass-pill {
+  background: var(--glass-fill);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--glass-border);
+}
+
+.glass-input {
+  background: var(--input-fill) !important;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--glass-border) !important;
+  color: var(--input-text) !important;
+}
+
+.glass-input:focus {
+  border-color: rgb(var(--accent-rgb) / 0.6) !important;
+  outline: 2px solid rgb(var(--accent-rgb) / 0.6);
+  outline-offset: 1px;
+}
+
+/* ===== Guided-session micro-animations (light, CSS/Tailwind only) ===== */
+
+@keyframes guidCountPop {
+  0%   { opacity: 0; transform: scale(0.4); }
+  35%  { opacity: 1; transform: scale(1.15); }
+  70%  { transform: scale(1); }
+  100% { opacity: 1; transform: scale(1); }
+}
+.guid-count-pop {
+  animation: guidCountPop 0.5s ease-out both;
+}
+
+@keyframes guidGoPop {
+  0%   { opacity: 0; transform: scale(0.2) rotate(-6deg); }
+  60%  { opacity: 1; transform: scale(1.18) rotate(2deg); }
+  100% { opacity: 1; transform: scale(1) rotate(0); }
+}
+.guid-go-pop {
+  animation: guidGoPop 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes guidSlideUp {
+  0%   { opacity: 0; transform: translateY(10px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+.guid-slide-up {
+  animation: guidSlideUp 0.3s ease-out both;
+}
+
+@keyframes guidCheckPop {
+  0%   { opacity: 0; transform: scale(0.3); }
+  60%  { opacity: 1; transform: scale(1.25); }
+  100% { opacity: 1; transform: scale(1); }
+}
+.guid-check-pop {
+  animation: guidCheckPop 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes guidRestFlash {
+  0%, 100% { color: #6ee7b7; }
+  50%      { color: #fbbf24; }
+}
+.guid-rest-flash {
+  animation: guidRestFlash 1s ease-in-out infinite;
+}
+
+/* Respect reduced-motion: disable all guided animations. */
+@media (prefers-reduced-motion: reduce) {
+  .guid-count-pop,
+  .guid-go-pop,
+  .guid-slide-up,
+  .guid-check-pop,
+  .guid-rest-flash {
+    animation: none !important;
+  }
+}
+
+/* ===== LOT I — Global decorative-animation control =====
+   Drives on the <html data-animations> attribute set by App.tsx, and also
+   honours the system prefers-reduced-motion preference. When either says
+   "no motion", the purely decorative / non-essential animations are reduced
+   or disabled, while functional feedback (timers, countdown, validation,
+   rest, transitions that carry state) is intentionally left intact.
+   The guided engine (guid-*) is intentionally NOT touched here. */
+
+/* Decorative/non-essential animations are disabled both when the user sets
+   animations OFF and when the system prefers-reduced-motion is active.
+   Functional feedback (timers, countdown, validation, rest, state transitions)
+   is intentionally preserved. The guided engine (guid-*) is not touched here. */
+[data-animations="off"] :is(
+  .animate-pulse,
+  .animate-bounce,
+  .animate-ping,
+  .animate-spin,
+  .animate-ping-slow,
+  .animate-in,
+  .animate-out,
+  [class*=" animate-in"],
+  [class*=" animate-out"]
+) {
+  animation: none !important;
+  transition: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :is(
+    .animate-pulse,
+    .animate-bounce,
+    .animate-ping,
+    .animate-spin,
+    .animate-ping-slow,
+    .animate-in,
+    .animate-out,
+    [class*=" animate-in"],
+    [class*=" animate-out"]
+  ) {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* ===== LOT I — Safe areas (viewport-fit=cover) =====
+   The app uses viewport-fit=cover, so on notched / standalone PWA devices the
+   sticky header and the fixed mobile bottom nav must respect the OS insets.
+   env() returns 0px on classic desktop, so no extra padding is added there. */
+
+#main-header {
+  padding-top: calc(env(safe-area-inset-top, 0px) + 0.75rem);
+  padding-left: calc(env(safe-area-inset-left, 0px) + 1rem);
+  padding-right: calc(env(safe-area-inset-right, 0px) + 1rem);
+}
+
+#mobile-bottom-nav {
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.5rem);
+  padding-left: calc(env(safe-area-inset-left, 0px) + 0.5rem);
+  padding-right: calc(env(safe-area-inset-right, 0px) + 0.5rem);
+}
+
+/* Keep page content clear of the fixed mobile bottom nav even with a home
+   indicator / safe-area inset (the base spacing already clears the nav bar). */
+main {
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 6rem) !important;
+}
+@media (min-width: 768px) {
+  main {
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 2rem) !important;
+  }
+}
+
+/* =====================================================================
+   LOT 6 — item 16 : visual personalisation (Système / Clair / Sombre +
+   6 accents) — purely CSS, driven by <html data-theme> + <html data-accent>
+   set at boot (see src/main.tsx / src/App.tsx). Dark & violet are the
+   defaults, so the existing appearance is preserved 1:1 with no attribute.
+   ===================================================================== */
+
+/* ---- Brand accent: Tailwind v4 utilities resolve against --color-* vars, so
+   re-mapping ONLY the accent families (violet / indigo / purple, all shades
+   actually used) retints the whole app in one place. The 6 accents also set
+   --accent-rgb used by the shared custom classes (cards, focus, selection). */
+:root[data-accent="violet"],
+:root:not([data-accent]) {
+  --accent-rgb: 139 92 246;
+}
+:root[data-accent="blue"] {
+  --accent-rgb: 59 130 246;
+  --color-violet-100: #dbeafe; --color-violet-200: #bfdbfe; --color-violet-300: #93c5fd;
+  --color-violet-400: #60a5fa; --color-violet-500: #3b82f6; --color-violet-600: #2563eb;
+  --color-violet-700: #1d4ed8; --color-violet-900: #1e3a8a; --color-violet-950: #172554;
+  --color-indigo-300: #93c5fd; --color-indigo-400: #60a5fa; --color-indigo-500: #3b82f6;
+  --color-indigo-600: #2563eb; --color-indigo-700: #1d4ed8; --color-indigo-900: #1e3a8a;
+  --color-indigo-950: #172554;
+  --color-purple-300: #93c5fd; --color-purple-500: #3b82f6; --color-purple-700: #1d4ed8;
+  --color-purple-900: #1e3a8a; --color-purple-950: #172554;
+}
+:root[data-accent="green"] {
+  --accent-rgb: 34 197 94;
+  --color-violet-100: #dcfce7; --color-violet-200: #bbf7d0; --color-violet-300: #86efac;
+  --color-violet-400: #4ade80; --color-violet-500: #22c55e; --color-violet-600: #16a34a;
+  --color-violet-700: #15803d; --color-violet-900: #14532d; --color-violet-950: #052e16;
+  --color-indigo-300: #86efac; --color-indigo-400: #4ade80; --color-indigo-500: #22c55e;
+  --color-indigo-600: #16a34a; --color-indigo-700: #15803d; --color-indigo-900: #14532d;
+  --color-indigo-950: #052e16;
+  --color-purple-300: #86efac; --color-purple-500: #22c55e; --color-purple-700: #15803d;
+  --color-purple-900: #14532d; --color-purple-950: #052e16;
+}
+:root[data-accent="orange"] {
+  --accent-rgb: 249 115 22;
+  --color-violet-100: #ffedd5; --color-violet-200: #fed7aa; --color-violet-300: #fdba74;
+  --color-violet-400: #fb923c; --color-violet-500: #f97316; --color-violet-600: #ea580c;
+  --color-violet-700: #c2410c; --color-violet-900: #7c2d12; --color-violet-950: #431407;
+  --color-indigo-300: #fdba74; --color-indigo-400: #fb923c; --color-indigo-500: #f97316;
+  --color-indigo-600: #ea580c; --color-indigo-700: #c2410c; --color-indigo-900: #7c2d12;
+  --color-indigo-950: #431407;
+  --color-purple-300: #fdba74; --color-purple-500: #f97316; --color-purple-700: #c2410c;
+  --color-purple-900: #7c2d12; --color-purple-950: #431407;
+}
+:root[data-accent="red"] {
+  --accent-rgb: 239 68 68;
+  --color-violet-100: #fee2e2; --color-violet-200: #fecaca; --color-violet-300: #fca5a5;
+  --color-violet-400: #f87171; --color-violet-500: #ef4444; --color-violet-600: #dc2626;
+  --color-violet-700: #b91c1c; --color-violet-900: #7f1d1d; --color-violet-950: #450a0a;
+  --color-indigo-300: #fca5a5; --color-indigo-400: #f87171; --color-indigo-500: #ef4444;
+  --color-indigo-600: #dc2626; --color-indigo-700: #b91c1c; --color-indigo-900: #7f1d1d;
+  --color-indigo-950: #450a0a;
+  --color-purple-300: #fca5a5; --color-purple-500: #ef4444; --color-purple-700: #b91c1c;
+  --color-purple-900: #7f1d1d; --color-purple-950: #450a0a;
+}
+:root[data-accent="rose"] {
+  --accent-rgb: 244 63 94;
+  --color-violet-100: #ffe4e6; --color-violet-200: #fecdd3; --color-violet-300: #fda4af;
+  --color-violet-400: #fb7185; --color-violet-500: #f43f5e; --color-violet-600: #e11d48;
+  --color-violet-700: #be123c; --color-violet-900: #881337; --color-violet-950: #4c0519;
+  --color-indigo-300: #fda4af; --color-indigo-400: #fb7185; --color-indigo-500: #f43f5e;
+  --color-indigo-600: #e11d48; --color-indigo-700: #be123c; --color-indigo-900: #881337;
+  --color-indigo-950: #4c0519;
+  --color-purple-300: #fda4af; --color-purple-500: #f43f5e; --color-purple-700: #be123c;
+  --color-purple-900: #881337; --color-purple-950: #4c0519;
+}
+
+/* ---- Light theme. System mode is resolved by JS (data-theme="light" is set
+   when the OS prefers light), so CSS only handles the two concrete modes. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --app-bg: #eef0f4;
+  --app-text: #0b1220;
+  --card-fill: rgba(255, 255, 255, 0.66);
+  --card-fill-hover: rgba(255, 255, 255, 0.82);
+  --card-border: rgba(15, 23, 42, 0.10);
+  --card-border-hover: rgba(15, 23, 42, 0.18);
+  --glass-fill: rgba(255, 255, 255, 0.55);
+  --glass-border: rgba(15, 23, 42, 0.12);
+  --input-fill: rgba(255, 255, 255, 0.7);
+  --input-text: #0b1220;
+
+  /* Primary ink: the app uses `white` for both surface tints AND primary text.
+     On a light page those become subtle dark tints / dark text in one step. */
+  --color-white: #101828;
+  --color-black: #0b1220;
+
+  /* Neutrals: shift zinc/slate up the scale (darker) so secondary text stays
+     readable on light surfaces while the dark gradient panels keep their own
+     colour (they are not in zinc/slate). */
+  --color-zinc-100: #334155;
+  --color-zinc-200: #334155;
+  --color-zinc-300: #3f3f46;
+  --color-zinc-400: #52525b;
+  --color-zinc-500: #6b7280;
+  --color-zinc-600: #9ca3af;
+  --color-zinc-900: #18181b;
+  --color-slate-950: #1e293b;
+}
+
+/* Status colours (success/warning/info/danger) have two homes: dark panels
+   (guided/classic session) where their bright tones read well, and light cards
+   where the bright tones almost disappear. We ONLY darken them when they sit
+   INSIDE a light surface, so the dark panels are untouched. */
+:root[data-theme="light"] :is(.sport-card, .glass-pill, .glass-input, [class*="bg-white/"]) :is(
+  .text-emerald-200, .text-emerald-300, .text-emerald-400,
+  .text-amber-200, .text-amber-300, .text-amber-400,
+  .text-teal-300, .text-teal-400,
+  .text-sky-200, .text-sky-300, .text-sky-400,
+  .text-rose-200, .text-rose-300, .text-rose-400,
+  .text-orange-400
+) {
+  --color-emerald-200: #047857; --color-emerald-300: #047857; --color-emerald-400: #059669;
+  --color-amber-200: #b45309; --color-amber-300: #b45309; --color-amber-400: #d97706;
+  --color-teal-300: #0f766e; --color-teal-400: #0d9488;
+  --color-sky-200: #0369a1; --color-sky-300: #0284c7; --color-sky-400: #0369a1;
+  --color-rose-200: #be123c; --color-rose-300: #be123c; --color-rose-400: #e11d48;
+  --color-orange-400: #c2410c;
+}
+
+/* Colour surfaces that stay coloured in BOTH themes (hero banner, primary CTA
+   gradients, guided/classic session panels, danger buttons) must keep white
+   label text. A direct text-* utility on the element always wins over this
+   inherited colour, so translucent chips with their own labels are unaffected.
+   The attribute selector (0,2,0) also wins over any plain (0,1,0) text-*
+   utility at the same level — exactly what we want for the white labels. */
+:root[data-theme="light"] :where(
+  .bg-violet-500, .bg-violet-600, .bg-violet-700, .bg-violet-900, .bg-violet-950,
+  .bg-indigo-500, .bg-indigo-600, .bg-indigo-700, .bg-indigo-900, .bg-indigo-950,
+  .bg-purple-500, .bg-purple-600, .bg-purple-700, .bg-purple-900, .bg-purple-950,
+  .bg-rose-500, .bg-rose-600, .bg-rose-900, .bg-rose-950,
+  .bg-emerald-500, .bg-emerald-600, .bg-emerald-800, .bg-emerald-950,
+  .bg-amber-500, .bg-amber-600, .bg-amber-950,
+  .bg-sky-500, .bg-sky-600, .bg-sky-950,
+  .bg-teal-500, .bg-teal-950,
+  .bg-orange-500, .bg-orange-600, .bg-orange-700, .bg-orange-900,
+  .from-violet-100, .from-violet-400, .from-violet-500, .from-violet-600, .from-violet-700, .from-violet-900, .from-violet-950,
+  .from-indigo-400, .from-indigo-500, .from-indigo-600, .from-indigo-700, .from-indigo-900, .from-indigo-950,
+  .from-purple-600, .from-purple-700, .from-purple-900, .from-purple-950,
+  .from-rose-600, .from-rose-900, .from-rose-950,
+  .from-emerald-400, .from-emerald-500, .from-emerald-950,
+  .from-amber-400, .from-amber-500,
+  .from-teal-400, .from-teal-500, .from-teal-950,
+  .from-sky-500, .from-sky-600,
+  .from-orange-400, .from-orange-500, .from-orange-700, .from-orange-900,
+  .to-indigo-400, .to-indigo-500, .to-indigo-600, .to-indigo-700, .to-indigo-900, .to-indigo-950,
+  .to-purple-500, .to-purple-700, .to-purple-900, .to-purple-950,
+  .to-emerald-400, .to-emerald-500,
+  .to-teal-400, .to-teal-950,
+  .to-orange-400, .to-orange-500,
+  .to-sky-500,
+  .to-amber-500,
+  .to-black\/60, .to-black\/80
+) {
+  color: #ffffff;
+}
+
+/* Decorative blobs inside the hero are white glass; on light they become dark
+   ink via --color-white and stay tasteful. Nothing to fix here. */
+
