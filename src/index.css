@@ -1,0 +1,212 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-display: 'Teko', sans-serif;
+    --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: #050505;
+    color: #ffffff;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+.font-display {
+  font-family: 'Teko', sans-serif;
+  letter-spacing: 0.04em;
+}
+
+/* Custom subtle scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #050505;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(139, 92, 246, 0.5);
+}
+
+/* Frosted Glass Cards & Elements */
+.sport-card {
+  background: rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 1.5rem;
+  transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.sport-card:hover {
+  border-color: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.sport-card-active {
+  background: rgba(139, 92, 246, 0.12);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(168, 85, 247, 0.35);
+  border-radius: 1.5rem;
+}
+
+.glass-pill {
+  background: rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.glass-input {
+  background: rgba(255, 255, 255, 0.04) !important;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  color: #ffffff !important;
+}
+
+.glass-input:focus {
+  border-color: rgba(139, 92, 246, 0.6) !important;
+  outline: none;
+}
+
+/* ===== Guided-session micro-animations (light, CSS/Tailwind only) ===== */
+
+@keyframes guidCountPop {
+  0%   { opacity: 0; transform: scale(0.4); }
+  35%  { opacity: 1; transform: scale(1.15); }
+  70%  { transform: scale(1); }
+  100% { opacity: 1; transform: scale(1); }
+}
+.guid-count-pop {
+  animation: guidCountPop 0.5s ease-out both;
+}
+
+@keyframes guidGoPop {
+  0%   { opacity: 0; transform: scale(0.2) rotate(-6deg); }
+  60%  { opacity: 1; transform: scale(1.18) rotate(2deg); }
+  100% { opacity: 1; transform: scale(1) rotate(0); }
+}
+.guid-go-pop {
+  animation: guidGoPop 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes guidSlideUp {
+  0%   { opacity: 0; transform: translateY(10px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+.guid-slide-up {
+  animation: guidSlideUp 0.3s ease-out both;
+}
+
+@keyframes guidCheckPop {
+  0%   { opacity: 0; transform: scale(0.3); }
+  60%  { opacity: 1; transform: scale(1.25); }
+  100% { opacity: 1; transform: scale(1); }
+}
+.guid-check-pop {
+  animation: guidCheckPop 0.35s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes guidRestFlash {
+  0%, 100% { color: #6ee7b7; }
+  50%      { color: #fbbf24; }
+}
+.guid-rest-flash {
+  animation: guidRestFlash 1s ease-in-out infinite;
+}
+
+/* Respect reduced-motion: disable all guided animations. */
+@media (prefers-reduced-motion: reduce) {
+  .guid-count-pop,
+  .guid-go-pop,
+  .guid-slide-up,
+  .guid-check-pop,
+  .guid-rest-flash {
+    animation: none !important;
+  }
+}
+
+/* ===== LOT I — Global decorative-animation control =====
+   Drives on the <html data-animations> attribute set by App.tsx, and also
+   honours the system prefers-reduced-motion preference. When either says
+   "no motion", the purely decorative / non-essential animations are reduced
+   or disabled, while functional feedback (timers, countdown, validation,
+   rest, transitions that carry state) is intentionally left intact.
+   The guided engine (guid-*) is intentionally NOT touched here. */
+
+/* Decorative/non-essential animations are disabled both when the user sets
+   animations OFF and when the system prefers-reduced-motion is active.
+   Functional feedback (timers, countdown, validation, rest, state transitions)
+   is intentionally preserved. The guided engine (guid-*) is not touched here. */
+[data-animations="off"] :is(
+  .animate-pulse,
+  .animate-bounce,
+  .animate-ping,
+  .animate-spin,
+  .animate-ping-slow,
+  .animate-in,
+  .animate-out,
+  [class*=" animate-in"],
+  [class*=" animate-out"]
+) {
+  animation: none !important;
+  transition: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :is(
+    .animate-pulse,
+    .animate-bounce,
+    .animate-ping,
+    .animate-spin,
+    .animate-ping-slow,
+    .animate-in,
+    .animate-out,
+    [class*=" animate-in"],
+    [class*=" animate-out"]
+  ) {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* ===== LOT I — Safe areas (viewport-fit=cover) =====
+   The app uses viewport-fit=cover, so on notched / standalone PWA devices the
+   sticky header and the fixed mobile bottom nav must respect the OS insets.
+   env() returns 0px on classic desktop, so no extra padding is added there. */
+
+#main-header {
+  padding-top: calc(env(safe-area-inset-top, 0px) + 0.75rem);
+  padding-left: calc(env(safe-area-inset-left, 0px) + 1rem);
+  padding-right: calc(env(safe-area-inset-right, 0px) + 1rem);
+}
+
+#mobile-bottom-nav {
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.5rem);
+  padding-left: calc(env(safe-area-inset-left, 0px) + 0.5rem);
+  padding-right: calc(env(safe-area-inset-right, 0px) + 0.5rem);
+}
+
+/* Keep page content clear of the fixed mobile bottom nav even with a home
+   indicator / safe-area inset (the base spacing already clears the nav bar). */
+main {
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 6rem) !important;
+}
+@media (min-width: 768px) {
+  main {
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 2rem) !important;
+  }
+}
+

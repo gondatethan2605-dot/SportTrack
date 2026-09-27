@@ -1,0 +1,1025 @@
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import {
+  NavPage,
+  UserProfile,
+  WorkoutProgram,
+  Exercise,
+  WorkoutSession,
+  PersonalRecord,
+  Goal,
+  BodyMeasurement,
+  WorkoutProgramDay,
+  StretchItem,
+  MuscleGroup,
+  ExercisePerformance,
+  ExerciseBest,
+} from './types';
+import { SportTrackStorage } from './db/indexedDb';
+import { getDefaultStretchesForDay } from './data/stretchesData';
+import { computeSessionXp } from './utilsXp';
+import { computeStreak } from './utilsStreak';
+import { hasValidCompletedSet } from './utilsSession';
+import { updateDayExerciseSetRestSec, updateDayExerciseTransitionRestSec } from './utilsProgram';
+import { buildSessionPerformances, computeExerciseBest } from './utilsProgression';
+import { buildNewRecordItems, type NewRecordItem } from './utilsRecords';
+import { computeLevelFromXp, applyXpToProfile } from './utilsLevels';
+import {
+  computeChallengeProgress,
+  computeWeekKey,
+  settleWeeklyChallengeRewards,
+  loadChallengeLedger,
+  saveChallengeLedger,
+  type ChallengeLedger,
+} from './utilsChallenges';
+import { Header } from './components/Header';
+import { Navigation } from './components/Navigation';
+import { PwaInstallBanner } from './components/PwaInstallBanner';
+
+// Pages
+import { HomePage } from './pages/HomePage';
+import { ProgramsPage } from './pages/ProgramsPage';
+import { ExercisesPage } from './pages/ExercisesPage';
+import { StretchesPage } from './pages/StretchesPage';
+import { WorkoutSessionPage } from './pages/WorkoutSessionPage';
+import { CalendarPage } from './pages/CalendarPage';
+import { StatsPage } from './pages/StatsPage';
+import { GoalsPage } from './pages/GoalsPage';
+import { ProgressPage } from './pages/ProgressPage';
+import { SettingsPage } from './pages/SettingsPage';
+
+import { initialProfile } from './data/initialData';
+import { Dumbbell, CheckCircle2, Trophy, X, AlertTriangle } from 'lucide-react';
+import { getWorkoutSettings } from './utilsSettings';
+
+// LOT I — Animations globales.
+// Décoration du document: le `data-animations` sur <html> pilote le CSS.
+// Consommé par index.css pour réduire/supprimer les animations purement
+// décoratives quand animationsEnabled=false (ou prefers-reduced-motion).
+function applyAnimationsAttribute(enabled: boolean) {
+  const el = typeof document !== 'undefined' ? document.documentElement : null;
+  if (el) el.setAttribute('data-animations', enabled ? 'on' : 'off');
+}
+
+export default function App() {
+  const [currentPage, setCurrentPage] = useState<NavPage>('accueil');
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [animationsEnabled, setAnimationsEnabled] = useState<boolean>(() => getWorkoutSettings().animationsEnabled);
+
+  // LOT I — Keep the global animation flag in sync with the saved preference and
+  // with the system reduced-motion preference (checked on the server-free client
+  // side). Runs on mount and whenever the preference changes.
+  useEffect(() => {
+    applyAnimationsAttribute(animationsEnabled);
+  }, [animationsEnabled]);
+
+  useEffect(() => {
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const sync = () => {
+      // Reduced-motion users get animations OFF regardless of the toggle.
+      applyAnimationsAttribute(mq.matches ? false : animationsEnabled);
+    };
+    sync();
+    mq.addEventListener?.('change', sync);
+    return () => mq.removeEventListener?.('change', sync);
+  }, [animationsEnabled]);
+
+  // LOT E — surfaced storage failure. IndexedDB errors used to be swallowed
+  // into console.error only, which made a broken/blocked database look exactly
+  // like a brand-new install (every page "empty", no explanation).
+  const [appError, setAppError] = useState<string | null>(null);
+
+  // Core Data state
+  const [profile, setProfile] = useState<UserProfile>(initialProfile);
+  const [programs, setPrograms] = useState<WorkoutProgram[]>([]);
+  const [exercises, setExercises] = useState<Exercise[]>([]);
+  const [sessions, setSessions] = useState<WorkoutSession[]>([]);
+  const [records, setRecords] = useState<PersonalRecord[]>([]);
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [measurements, setMeasurements] = useState<BodyMeasurement[]>([]);
+  const [exercisePerformances, setExercisePerformances] = useState<ExercisePerformance[]>([]);
+  const [exerciseBests, setExerciseBests] = useState<ExerciseBest[]>([]);
+
+  // LOT 4 — Item 12: weekly-challenge claims ledger (localStorage). Loaded once
+  // at startup; totalChallengeXpEarned is folded into the level computation so
+  // a reload recomputes the same level. The per-week claims never award twice.
+  const [challengeLedger, setChallengeLedger] = useState<ChallengeLedger>(() => loadChallengeLedger());
+
+  // Active workout context if started from program
+  const [activeSessionContext, setActiveSessionContext] = useState<{
+    programTitle?: string;
+    dayName?: string;
+    programId?: string;
+    dayId?: string;
+    exerciseIds?: string[];
+    exerciseConfigs?: import('./types').ProgramExerciseConfig[];
+    stretches?: StretchItem[];
+    dayOfWeek?: string;
+    muscleGroups?: MuscleGroup[];
+  } | null>(null);
+
+  // F5 — guard state: set by WorkoutSessionPage while a real session is in
+  // progress, used to confirm any in-app navigation that would leave it.
+  const workoutActiveRef = useRef(false);
+  const [leaveConfirmPage, setLeaveConfirmPage] = useState<NavPage | null>(null);
+  const pendingLeaveRef = useRef<NavPage>('accueil');
+  // LOT E — the hashchange listener is registered once, so it must not close
+  // over the page it was mounted on: currentPageRef always holds the live page.
+  const currentPageRef = useRef<NavPage>(currentPage);
+  const suppressHashRef = useRef(false);
+
+  useEffect(() => {
+    currentPageRef.current = currentPage;
+  }, [currentPage]);
+
+  const handleWorkoutActivityChange = useCallback((active: boolean) => {
+    workoutActiveRef.current = active;
+  }, []);
+
+  // Victory celebration modal
+  const [completedSessionToast, setCompletedSessionToast] = useState<{
+    title: string;
+    volumeKg: number;
+    earnedXp: number;
+    newRecords?: NewRecordItem[];
+  } | null>(null);
+
+  // Calculate real profile stats from actual completed sessions. bonusXp is the
+  // all-time challenge-reward XP (LOT 4 item 12) added on top of the session XP
+  // so the level is fully deterministic from real data on every load.
+  const syncProfileWithSessions = (rawProfile: UserProfile, allSessions: WorkoutSession[], bonusXp = 0): UserProfile => {
+    if (!allSessions || allSessions.length === 0) {
+      const base = computeLevelFromXp(bonusXp || 0);
+      return {
+        ...rawProfile,
+        level: base.level,
+        currentXp: base.currentXp,
+        nextLevelXp: base.nextLevelXp,
+        streakDays: 0,
+        bestStreak: 0,
+        weeklyCompletedSessions: 0,
+        totalWorkouts: 0,
+        totalVolumeKg: 0,
+      };
+    }
+
+    // Calculate real streak from distinct session dates
+    const streak = computeStreak(allSessions.map((s) => s.date));
+
+    // Calculate current week completed sessions (Monday to Sunday)
+    const now = new Date();
+    const currentDayOfWeek = now.getDay(); // 0 is Sunday
+    const mondayOffset = currentDayOfWeek === 0 ? -6 : 1 - currentDayOfWeek;
+    const monday = new Date(now);
+    monday.setDate(now.getDate() + mondayOffset);
+    monday.setHours(0, 0, 0, 0);
+    const mondayStr = monday.toISOString().split('T')[0];
+
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() + 6);
+    sunday.setHours(23, 59, 59, 999);
+    const sundayStr = sunday.toISOString().split('T')[0];
+
+    const thisWeekSessions = allSessions.filter((s) => s.date >= mondayStr && s.date <= sundayStr);
+    const totalVolume = allSessions.reduce((acc, s) => acc + (s.totalVolumeKg || 0), 0);
+
+    // Compute earned XP purely from real completed sessions + challenge rewards.
+    const sessionXp = allSessions.reduce((acc, s) => {
+      return acc + computeSessionXp(s.exercises?.length || 0, s.stretchesCount || 0);
+    }, 0);
+    const { level, currentXp, nextLevelXp } = computeLevelFromXp(sessionXp + (bonusXp || 0));
+
+    return {
+      ...rawProfile,
+      level,
+      currentXp,
+      nextLevelXp,
+      streakDays: streak,
+      bestStreak: Math.max(rawProfile.bestStreak || 0, streak),
+      weeklyCompletedSessions: thisWeekSessions.length,
+      totalWorkouts: allSessions.length,
+      totalVolumeKg: totalVolume,
+    };
+  };
+
+  // Load from IndexedDB on startup
+  const loadAllData = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      // LOT E — read the ledger here instead of closing over the mount value:
+      // the old empty dep array froze bonusXp at 0, so an import or a reset
+      // re-synced the profile without any challenge XP and the level dropped.
+      const ledger = loadChallengeLedger();
+      const [
+        loadedProfile,
+        loadedPrograms,
+        loadedExercises,
+        loadedSessions,
+        loadedRecords,
+        loadedGoals,
+        loadedMeasurements,
+        loadedExercisePerformances,
+        loadedExerciseBests,
+      ] = await Promise.all([
+        SportTrackStorage.getProfile(),
+        SportTrackStorage.getPrograms(),
+        SportTrackStorage.getExercises(),
+        SportTrackStorage.getSessions(),
+        SportTrackStorage.getRecords(),
+        SportTrackStorage.getGoals(),
+        SportTrackStorage.getMeasurements(),
+        SportTrackStorage.getExercisePerformances(),
+        SportTrackStorage.getExerciseBests(),
+      ]);
+
+      const syncedProfile = syncProfileWithSessions(loadedProfile, loadedSessions, ledger.totalChallengeXpEarned);
+      setProfile(syncedProfile);
+      setPrograms(loadedPrograms);
+      setExercises(loadedExercises);
+      setSessions(loadedSessions);
+      setRecords(loadedRecords);
+      setGoals(loadedGoals);
+      setMeasurements(loadedMeasurements);
+      setExercisePerformances(loadedExercisePerformances);
+      setExerciseBests(loadedExerciseBests);
+      // LOT E — a successful read clears any previously surfaced storage error.
+      setAppError(null);
+    } catch (e) {
+      // LOT E — never fail silently: the user must know the database could not
+      // be read, otherwise the app looks like a fresh install and they may
+      // re-enter data that still exists.
+      console.error('Error loading IndexedDB data', e);
+      setAppError(
+        'Impossible de lire la base de donnees locale (IndexedDB). ' +
+          'Verifiez que le stockage du navigateur est autorise, puis rechargez la page. ' +
+          'Vos donnees ne sont pas supprimees.',
+      );
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadAllData();
+  }, [loadAllData]);
+
+  // LOT 4 — Item 12: settle weekly-challenge rewards exactly once. The ledger
+  // (localStorage) records which challenges of the current week were already
+  // credited, so reloads / re-renders never grant the same XP twice. When
+  // nothing is pending, this effect is a pure no-op.
+  useEffect(() => {
+    const weekKey = computeWeekKey();
+    const progress = computeChallengeProgress({ sessions, records, today: new Date() });
+    const { ledger, pending } = settleWeeklyChallengeRewards(progress, challengeLedger, weekKey);
+    const bonus = pending.reduce((acc, p) => acc + p.xp, 0);
+    if (bonus <= 0) {
+      if (challengeLedger.weekKey !== weekKey && ledger.weekKey === weekKey) {
+        // Week rollover: persist the fresh claims map (unclaimed) so the next
+        // settlement knows the week switched, without awarding XP here.
+        saveChallengeLedger(ledger);
+        setChallengeLedger(ledger);
+      }
+      return;
+    }
+    const updatedProfile = applyXpToProfile(profile, bonus);
+    saveChallengeLedger(ledger);
+    setChallengeLedger(ledger);
+    setProfile(updatedProfile);
+    SportTrackStorage.saveProfile(updatedProfile);
+  }, [sessions, records, challengeLedger]);
+
+  // Handle URL hash changes for deep links / shortcuts
+  useEffect(() => {
+    const handleHash = () => {
+      const hash = window.location.hash.replace('#', '');
+      const validPages: NavPage[] = [
+        'accueil',
+        'programme',
+        'exercices',
+        'etirements',
+        'seance',
+        'calendrier',
+        'statistiques',
+        'objectifs',
+        'progression',
+        'parametres',
+      ];
+      if (validPages.includes(hash as NavPage)) {
+        // LOT E — a manual hash edit (or a deep link) used to call
+        // setCurrentPage directly, completely bypassing the F5 session guard: a
+        // typed "#statistiques" dropped the user out of a running session without
+        // confirmation. Hash navigation now goes through the same guard.
+        const target = hash as NavPage;
+        if (workoutActiveRef.current && target !== 'seance' && target !== currentPageRef.current) {
+          pendingLeaveRef.current = target;
+          setLeaveConfirmPage(target);
+          // Restoring the URL below re-fires hashchange: skip that echo so the
+          // modal is not re-opened in a loop.
+          suppressHashRef.current = true;
+          if (window.location.hash !== `#${currentPageRef.current}`) {
+            window.location.hash = currentPageRef.current;
+          }
+          return;
+        }
+        setCurrentPage(target);
+      }
+    };
+
+    handleHash();
+    window.addEventListener('hashchange', handleHash);
+    return () => window.removeEventListener('hashchange', handleHash);
+  }, []);
+
+  const applyNavigate = (page: NavPage) => {
+    setCurrentPage(page);
+    window.location.hash = page;
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // F5 — intercept in-app navigation while a session is in progress. Finish and
+  // cancel paths reset workoutActiveRef before navigating, so they never show
+  // the confirmation again (no double confirmation, no navigation loops).
+  const handleNavigate = (page: NavPage) => {
+    if (page === 'seance' || page === currentPage) {
+      applyNavigate(page);
+      return;
+    }
+    if (workoutActiveRef.current) {
+      pendingLeaveRef.current = page;
+      setLeaveConfirmPage(page);
+      return;
+    }
+    applyNavigate(page);
+  };
+
+  const confirmLeaveSession = (page: NavPage) => {
+    workoutActiveRef.current = false;
+    setLeaveConfirmPage(null);
+    applyNavigate(page);
+  };
+
+  const stayInSession = () => {
+    setLeaveConfirmPage(null);
+  };
+
+  // Workout Session Triggers
+  const handleStartSession = (programDayId?: string) => {
+    if (programDayId) {
+      const activeProg = programs.find((p) => p.isActive) || programs[0];
+      const day = activeProg?.days.find((d) => d.id === programDayId);
+      if (day) {
+        setActiveSessionContext({
+          programId: activeProg?.id,
+          dayId: day.id,
+          programTitle: activeProg?.title,
+          dayName: day.name,
+          exerciseIds: day.exerciseIds,
+          exerciseConfigs: day.exercises,
+          stretches: day.stretches || getDefaultStretchesForDay(day.dayOfWeek, day.name, day.muscleGroups),
+          dayOfWeek: day.dayOfWeek,
+          muscleGroups: day.muscleGroups,
+        });
+      } else {
+        setActiveSessionContext(null);
+      }
+    } else {
+      setActiveSessionContext(null);
+    }
+    handleNavigate('seance');
+  };
+
+  const handleStartSessionWithDay = (day: WorkoutProgramDay, program: WorkoutProgram) => {
+    setActiveSessionContext({
+      programId: program.id,
+      dayId: day.id,
+      programTitle: program.title,
+      dayName: `${program.title} — ${day.name}`,
+      exerciseIds: day.exerciseIds,
+      exerciseConfigs: day.exercises,
+      stretches: day.stretches || getDefaultStretchesForDay(day.dayOfWeek, day.name, day.muscleGroups),
+      dayOfWeek: day.dayOfWeek,
+      muscleGroups: day.muscleGroups,
+    });
+    handleNavigate('seance');
+  };
+
+  // Save Completed Workout Session
+  const handleFinishSession = async (session: WorkoutSession) => {
+    // V7.8 P2 double-protection: refuse an empty/void session even on a
+    // programmatic call. No Session, XP, totals, performances or records.
+    if (hasValidCompletedSet(session.exercises) === false) {
+      return;
+    }
+
+    // 1. Calculate XP & Level Up (including bonus for completed stretches)
+    const earnedXp = computeSessionXp(session.exercises.length, session.stretchesCount || 0);
+    let newXp = profile.currentXp + earnedXp;
+    let newLevel = profile.level;
+    let newNextXp = profile.nextLevelXp;
+
+    if (newXp >= newNextXp) {
+      newLevel += 1;
+      newXp = newXp - newNextXp;
+      newNextXp = Math.round(newNextXp * 1.35);
+    }
+
+    // Streak from distinct session dates (existing stored sessions + this one)
+    const newStreak = computeStreak([...sessions.map((s) => s.date), session.date]);
+
+    const updatedProfile: UserProfile = {
+      ...profile,
+      currentXp: newXp,
+      level: newLevel,
+      nextLevelXp: newNextXp,
+      streakDays: newStreak,
+      bestStreak: Math.max(profile.bestStreak || 0, newStreak),
+      weeklyCompletedSessions: profile.weeklyCompletedSessions + 1,
+      totalWorkouts: profile.totalWorkouts + 1,
+      totalVolumeKg: profile.totalVolumeKg + session.totalVolumeKg,
+    };
+
+    // 2. Detect any new PR (one record per exercise, best completed set)
+    const bestByExercise = new Map<string, PersonalRecord>();
+    session.exercises.forEach((ex) => {
+      ex.sets.forEach((set) => {
+        if (set.completed && set.weightKg > 0) {
+          const existingRec = records.find((r) => r.exerciseId === ex.exerciseId);
+          if (!existingRec || set.weightKg > existingRec.weightKg) {
+            const current = bestByExercise.get(ex.exerciseId);
+            if (!current || set.weightKg > current.weightKg || (set.weightKg === current.weightKg && set.reps > current.reps)) {
+              bestByExercise.set(ex.exerciseId, {
+                id: `rec-${Date.now()}-${ex.exerciseId}`,
+                exerciseId: ex.exerciseId,
+                exerciseName: ex.exerciseName,
+                weightKg: set.weightKg,
+                reps: set.reps,
+                date: session.date,
+                previousWeightKg: existingRec ? existingRec.weightKg : undefined,
+              });
+            }
+          }
+        }
+      });
+    });
+    const newRecordsToSave = Array.from(bestByExercise.values());
+
+    // 3. Save to IndexedDB
+    // LOT E — the writes below used to be unguarded: one QuotaExceeded or
+    // blocked transaction threw a rejected promise, the session was lost and the
+    // user stayed on the session page with zero feedback.
+    try {
+      await SportTrackStorage.putItem('sessions', session);
+      await SportTrackStorage.saveProfile(updatedProfile);
+
+      for (const rec of newRecordsToSave) {
+        await SportTrackStorage.putItem('records', rec);
+      }
+
+      // 3b. Per-exercise progression: build performances from recorded sets, merge,
+      //     recompute bests for the affected exercises, persist and update state.
+      const newEntries = buildSessionPerformances(session);
+      const perfById = new Map<string, ExercisePerformance>();
+      for (const p of exercisePerformances) perfById.set(p.id, p);
+      for (const p of newEntries) perfById.set(p.id, p);
+      const mergedPerformances = Array.from(perfById.values());
+
+      const affectedIds = new Set(newEntries.map((p) => p.exerciseId));
+      const byExercise = new Map<string, ExercisePerformance[]>();
+      for (const p of mergedPerformances) {
+        const list = byExercise.get(p.exerciseId);
+        if (list) list.push(p);
+        else byExercise.set(p.exerciseId, [p]);
+      }
+      const updatedBests: ExerciseBest[] = [];
+      for (const exId of affectedIds) {
+        const best = computeExerciseBest(exId, byExercise.get(exId) || []);
+        if (best) updatedBests.push(best);
+      }
+
+      if (newEntries.length > 0) {
+        await SportTrackStorage.saveExercisePerformances(newEntries);
+      }
+      if (updatedBests.length > 0) {
+        await SportTrackStorage.saveExerciseBests(updatedBests);
+      }
+
+      // 4. Update memory state (only reached once the write actually succeeded)
+      setSessions([session, ...sessions]);
+      setProfile(updatedProfile);
+      if (newRecordsToSave.length > 0) {
+        setRecords([...newRecordsToSave, ...records]);
+      }
+      if (newEntries.length > 0) {
+        setExercisePerformances(mergedPerformances);
+      }
+      if (updatedBests.length > 0) {
+        setExerciseBests([...exerciseBests.filter((b) => !affectedIds.has(b.exerciseId)), ...updatedBests]);
+      }
+
+      // 5. Trigger victory toast (including any genuine NEW RECORD, rerun-proof:
+      //    an identical session finished twice announces nothing the second time).
+      const newRecordItems = buildNewRecordItems(newRecordsToSave, exerciseBests, updatedBests);
+      setCompletedSessionToast({
+        title: session.title,
+        volumeKg: session.totalVolumeKg,
+        earnedXp,
+        newRecords: newRecordItems.length > 0 ? newRecordItems : undefined,
+      });
+
+      setActiveSessionContext(null);
+      // F5 — finishing a session is a deliberate exit: never re-confirm.
+      workoutActiveRef.current = false;
+      handleNavigate('accueil');
+    } catch (e) {
+      // LOT E — the session stays on screen so the user can note their numbers
+      // and retry; memory state is untouched, so nothing is half-saved.
+      console.error('Error saving completed session', e);
+      setAppError(
+        "La seance n'a pas pu etre enregistree (stockage local plein ou indisponible). " +
+          "Les donnees restent affichees a l'ecran : notez-les puis reessayez, ou liberez de l'espace de stockage.",
+      );
+    }
+  };
+
+  // Program Management
+  const handleSelectActiveProgram = async (programId: string) => {
+    const updated = programs.map((p) => ({
+      ...p,
+      isActive: p.id === programId,
+    }));
+    setPrograms(updated);
+    for (const p of updated) {
+      await SportTrackStorage.putItem('programs', p);
+    }
+  };
+
+  const handleSaveProgram = async (program: WorkoutProgram) => {
+    await SportTrackStorage.putItem('programs', program);
+    setPrograms((prev) => {
+      const exists = prev.some((p) => p.id === program.id);
+      if (exists) {
+        return prev.map((p) => (p.id === program.id ? program : p));
+      }
+      return [...prev, program];
+    });
+  };
+
+  // Rest AFTER a SERIES (rest BETWEEN sets) edited from the session PREP screen:
+  // persist the targeted restPlan[setIndex] back into the REAL program without
+  // touching any other field of the config or of other programs/days. This
+  // writes through the same storage used everywhere else (no new store, DB v8).
+  const handleUpdateProgramSetRest = async (
+    programId: string,
+    dayId: string,
+    exerciseId: string,
+    setIndex: number,
+    restSec: number
+  ) => {
+    const program = programs.find((p) => p.id === programId);
+    if (!program) return;
+    const updatedProgram = updateDayExerciseSetRestSec(program, dayId, exerciseId, setIndex, restSec);
+    await SportTrackStorage.putItem('programs', updatedProgram);
+    setPrograms((prev) => prev.map((p) => (p.id === programId ? updatedProgram : p)));
+  };
+
+  // Rest AFTER the LAST set of an exercise (before the next exercise), edited
+  // from the session PREP screen: targeted transitionRestSec update only.
+  const handleUpdateProgramTransitionRest = async (
+    programId: string,
+    dayId: string,
+    exerciseId: string,
+    transitionRestSec?: number
+  ) => {
+    const program = programs.find((p) => p.id === programId);
+    if (!program) return;
+    const updatedProgram = updateDayExerciseTransitionRestSec(program, dayId, exerciseId, transitionRestSec);
+    await SportTrackStorage.putItem('programs', updatedProgram);
+    setPrograms((prev) => prev.map((p) => (p.id === programId ? updatedProgram : p)));
+  };
+
+  const handleDeleteProgram = async (programId: string) => {
+    await SportTrackStorage.deleteItem('programs', programId);
+    setPrograms((prev) => {
+      const remaining = prev.filter((p) => p.id !== programId);
+      if (remaining.length > 0 && !remaining.some((p) => p.isActive)) {
+        const activated = { ...remaining[0], isActive: true };
+        remaining[0] = activated;
+        SportTrackStorage.putItem('programs', activated);
+      }
+      return remaining;
+    });
+  };
+
+  // Exercise Management
+  const handleAddExercise = async (exercise: Exercise) => {
+    await SportTrackStorage.putItem('exercises', exercise);
+    setExercises((prev) => [...prev, exercise]);
+  };
+
+  const handleUpdateExercise = async (exercise: Exercise) => {
+    await SportTrackStorage.putItem('exercises', exercise);
+    setExercises((prev) => prev.map((e) => (e.id === exercise.id ? exercise : e)));
+  };
+
+  const handleDeleteExercise = async (exerciseId: string) => {
+    await SportTrackStorage.deleteItem('exercises', exerciseId);
+    setExercises((prev) => prev.filter((e) => e.id !== exerciseId));
+  };
+
+  const handleToggleFavorite = async (exerciseId: string) => {
+    const target = exercises.find((e) => e.id === exerciseId);
+    if (!target) return;
+    const updated: Exercise = {
+      ...target,
+      isFavorite: !target.isFavorite,
+    };
+    await SportTrackStorage.putItem('exercises', updated);
+    setExercises((prev) => prev.map((e) => (e.id === exerciseId ? updated : e)));
+  };
+
+  // Goals Management
+  const handleAddGoal = async (goal: Goal) => {
+    await SportTrackStorage.putItem('goals', goal);
+    setGoals([...goals, goal]);
+  };
+
+  const handleUpdateGoal = async (goal: Goal) => {
+    await SportTrackStorage.putItem('goals', goal);
+    setGoals(goals.map((g) => (g.id === goal.id ? goal : g)));
+  };
+
+  const handleDeleteGoal = async (goalId: string) => {
+    await SportTrackStorage.deleteItem('goals', goalId);
+    setGoals(goals.filter((g) => g.id !== goalId));
+  };
+
+  // Progress Management
+  const handleAddMeasurement = async (measurement: BodyMeasurement) => {
+    await SportTrackStorage.putItem('measurements', measurement);
+    setMeasurements([...measurements, measurement]);
+  };
+
+  const handleAddRecord = async (record: PersonalRecord) => {
+    await SportTrackStorage.putItem('records', record);
+    setRecords([record, ...records]);
+  };
+
+  // Profile update
+  const handleUpdateProfile = async (updated: UserProfile) => {
+    await SportTrackStorage.saveProfile(updated);
+    setProfile(updated);
+  };
+
+  const activeProgram = programs.find((p) => p.isActive) || programs[0];
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-[#050505] flex items-center justify-center text-white relative overflow-hidden">
+        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-violet-600/20 blur-[120px] rounded-full pointer-events-none" />
+        <div className="sport-card p-8 flex flex-col items-center gap-4 z-10">
+          <div className="w-14 h-14 rounded-2xl overflow-hidden flex items-center justify-center animate-bounce shadow-lg shadow-violet-600/40">
+            <img src="/icon-192.png" alt="Logo SportTrack" className="w-full h-full object-cover" draggable={false} />
+          </div>
+          <span className="font-display text-2xl font-bold tracking-wider uppercase text-violet-300">
+            Chargement de SportTrack...
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-[#050505] text-white flex flex-col font-sans relative overflow-x-hidden">
+      {/* Ambient background blurred glow orbs for authentic Frosted Glass refraction */}
+      <div className="fixed top-[-10%] left-[-10%] w-[45vw] h-[45vw] max-w-[600px] max-h-[600px] bg-violet-900/20 blur-[130px] rounded-full pointer-events-none -z-0" />
+      <div className="fixed bottom-[-10%] right-[-10%] w-[55vw] h-[55vw] max-w-[700px] max-h-[700px] bg-violet-600/10 blur-[160px] rounded-full pointer-events-none -z-0" />
+      <div className="fixed top-[35%] right-[5%] w-[35vw] h-[35vw] max-w-[450px] max-h-[450px] bg-indigo-600/10 blur-[140px] rounded-full pointer-events-none -z-0" />
+
+      {/* PWA Install Banner */}
+      <PwaInstallBanner />
+
+      {/* Main Top Header */}
+      <Header
+        profile={profile}
+        currentPage={currentPage}
+        onNavigate={handleNavigate}
+        onOpenMobileMenu={() => setMobileMenuOpen(true)}
+      />
+
+      {/* Main Layout Container */}
+      <div className="flex-1 flex max-w-7xl w-full mx-auto relative z-10">
+        {/* Desktop Sidebar & Mobile Drawer Navigation */}
+        <Navigation
+          currentPage={currentPage}
+          onNavigate={handleNavigate}
+          mobileMenuOpen={mobileMenuOpen}
+          onCloseMobileMenu={() => setMobileMenuOpen(false)}
+        />
+
+        {/* Page Content View Area */}
+        <main className="flex-1 p-4 sm:p-6 md:p-8 pb-24 md:pb-8 overflow-y-auto flex flex-col justify-between">
+          <div>
+            {/* LOT E — storage failures must never be silent */}
+            {appError && (
+              <div
+                role="alert"
+                data-testid="storage-error-banner"
+                className="mb-6 rounded-3xl bg-red-950/40 backdrop-blur-xl border border-red-500/50 p-4 sm:p-5 flex items-start justify-between gap-4"
+              >
+                <div className="flex items-start gap-3.5 min-w-0">
+                  <div className="w-12 h-12 rounded-2xl bg-red-500/20 border border-red-400/40 flex items-center justify-center shrink-0">
+                    <AlertTriangle className="w-6 h-6 text-red-300" />
+                  </div>
+                  <div className="min-w-0">
+                    <span className="font-display text-base font-bold text-white uppercase">
+                      Probleme de stockage local
+                    </span>
+                    <p className="text-xs text-zinc-200 mt-1 leading-relaxed">{appError}</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    onClick={() => {
+                      setAppError(null);
+                      loadAllData();
+                    }}
+                    className="px-3 py-2 rounded-xl text-xs font-bold text-white bg-white/10 hover:bg-white/20 transition-colors"
+                  >
+                    Reessayer
+                  </button>
+                  <button
+                    onClick={() => setAppError(null)}
+                    className="p-2 rounded-xl text-zinc-300 hover:text-white hover:bg-white/10 transition-colors"
+                    aria-label="Fermer le message d'erreur de stockage"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Workout Completed Modal / Toast */}
+            {completedSessionToast && (
+              <div className="mb-6 rounded-3xl bg-white/5 backdrop-blur-xl border border-violet-500/40 p-4 sm:p-5 flex items-center justify-between gap-4 shadow-2xl animate-in slide-in-from-top">
+                <div className="flex items-center gap-3.5">
+                  <div className="w-12 h-12 rounded-2xl bg-violet-500/20 border border-violet-400/40 flex items-center justify-center shrink-0">
+                    <Trophy className="w-6 h-6 text-amber-400 fill-amber-400" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-display text-xl font-bold text-white uppercase">
+                        Séance Validée avec succès !
+                      </span>
+                      <span className="text-xs font-bold text-emerald-400 bg-emerald-950/60 px-2 py-0.5 rounded-lg border border-emerald-800/40">
+                        +{completedSessionToast.earnedXp} XP
+                      </span>
+                    </div>
+                    <p className="text-xs text-zinc-300">
+                      {completedSessionToast.title} • {completedSessionToast.volumeKg.toLocaleString('fr-FR')} kg soulevés au total.
+                    </p>
+
+                    {completedSessionToast.newRecords && completedSessionToast.newRecords.length > 0 && (
+                      <div className="mt-3 pt-3 border-t border-white/10 space-y-1.5" data-testid="session-new-records">
+                        {completedSessionToast.newRecords.map((r) => (
+                          <div
+                            key={`${r.exerciseId}-${r.mode}`}
+                            className="flex items-center justify-between gap-3 text-xs"
+                          >
+                            <span className="flex items-center gap-1.5 text-zinc-200 min-w-0">
+                              <Trophy className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                              <strong className="text-amber-300 uppercase text-[10px] tracking-wider shrink-0">
+                                Nouveau record
+                              </strong>
+                              <span className="truncate font-semibold">
+                                {r.exerciseName}
+                                <span className="text-zinc-400 font-normal">
+                                  {' '}({recordModeLabel(r.mode)})
+                                </span>
+                              </span>
+                            </span>
+                            <span className="shrink-0 font-mono font-bold text-amber-300" data-testid="session-new-record-value">
+                              {r.previousValue != null
+                                ? `${formatRecordValue(r.previousValue, r.unit)} → ${formatRecordValue(r.newValue, r.unit)}`
+                                : `Premier : ${formatRecordValue(r.newValue, r.unit)}`}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => setCompletedSessionToast(null)}
+                  className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-white/10 transition-colors"
+                  aria-label="Fermer la notification"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            )}
+
+            {/* F5 — Confirm leaving an in-progress session */}
+            {leaveConfirmPage && (
+              <div
+                className="fixed inset-0 z-[90] bg-black/80 backdrop-blur-md flex items-center justify-center p-4"
+                data-testid="leave-session-overlay"
+              >
+                <div
+                  role="alertdialog"
+                  aria-modal="true"
+                  aria-labelledby="leave-session-title"
+                  className="sport-card p-6 sm:p-7 max-w-md w-full text-center"
+                  data-testid="leave-session-modal"
+                >
+                  <div className="w-12 h-12 rounded-2xl bg-amber-500/15 border border-amber-500/40 flex items-center justify-center mx-auto mb-4">
+                    <AlertTriangle className="w-6 h-6 text-amber-400" />
+                  </div>
+                  <h3 id="leave-session-title" className="font-display text-lg sm:text-xl font-bold text-white mb-2">
+                    Séance en cours
+                  </h3>
+                  <p className="text-sm text-zinc-300 leading-relaxed mb-6">
+                    Une séance est en cours. Votre progression sera conservée.
+                    Voulez-vous vraiment quitter ?
+                  </p>
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    <button
+                      id="btn-leave-session-stay"
+                      onClick={stayInSession}
+                      className="flex-1 px-4 py-3 rounded-xl bg-violet-600 hover:bg-violet-500 text-white font-semibold text-sm transition-colors"
+                    >
+                      Continuer la séance
+                    </button>
+                    <button
+                      id="btn-leave-session-quit"
+                      onClick={() => confirmLeaveSession(pendingLeaveRef.current)}
+                      className="flex-1 px-4 py-3 rounded-xl bg-white/10 hover:bg-white/20 text-white font-semibold text-sm transition-colors"
+                    >
+                      Quitter
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* 1. Page Accueil */}
+            {currentPage === 'accueil' && (
+              <HomePage
+                profile={profile}
+                activeProgram={activeProgram}
+                recentRecords={records}
+                recentSessions={sessions}
+                exercisePerformances={exercisePerformances}
+                goals={goals}
+                exerciseBests={exerciseBests}
+                measurements={measurements}
+                onNavigate={handleNavigate}
+                onStartSession={handleStartSession}
+              />
+            )}
+
+            {/* 2. Page Programme */}
+            {currentPage === 'programme' && (
+              <ProgramsPage
+                programs={programs}
+                exercises={exercises}
+                onSelectActiveProgram={handleSelectActiveProgram}
+                onStartSessionWithDay={handleStartSessionWithDay}
+                onSaveProgram={handleSaveProgram}
+                onDeleteProgram={handleDeleteProgram}
+              />
+            )}
+
+            {/* 3. Page Exercices */}
+            {currentPage === 'exercices' && (
+              <ExercisesPage
+                exercises={exercises}
+                exercisePerformances={exercisePerformances}
+                exerciseBests={exerciseBests}
+                onAddExercise={handleAddExercise}
+                onUpdateExercise={handleUpdateExercise}
+                onDeleteExercise={handleDeleteExercise}
+                onToggleFavorite={handleToggleFavorite}
+              />
+            )}
+
+            {/* 4. Page Étirements */}
+            {currentPage === 'etirements' && (
+              <StretchesPage />
+            )}
+
+            {/* 5. Page Séance */}
+            {currentPage === 'seance' && (
+              <WorkoutSessionPage
+                availableExercises={exercises}
+                initialDayName={activeSessionContext?.dayName}
+                programTitle={activeSessionContext?.programTitle}
+                programId={activeSessionContext?.programId}
+                dayId={activeSessionContext?.dayId}
+                initialExerciseIds={activeSessionContext?.exerciseIds}
+                initialExerciseConfigs={activeSessionContext?.exerciseConfigs}
+                initialStretches={activeSessionContext?.stretches}
+                dayOfWeek={activeSessionContext?.dayOfWeek}
+                muscleGroups={activeSessionContext?.muscleGroups}
+                onFinishSession={handleFinishSession}
+                onCancelSession={() => {
+                  workoutActiveRef.current = false;
+                  handleNavigate('accueil');
+                }}
+                onWorkoutActivityChange={handleWorkoutActivityChange}
+                onUpdateProgramSetRest={handleUpdateProgramSetRest}
+                onUpdateProgramTransitionRest={handleUpdateProgramTransitionRest}
+                onLeaveSession={() => handleNavigate('accueil')}
+              />
+            )}
+
+            {/* 5. Page Calendrier */}
+            {currentPage === 'calendrier' && (
+              <CalendarPage
+                sessions={sessions}
+                activeProgram={programs.find((p) => p.isActive) || programs[0]}
+                records={records}
+                onStartSession={handleStartSession}
+                onStartSessionWithDay={handleStartSessionWithDay}
+              />
+            )}
+
+            {/* 6. Page Statistiques */}
+            {currentPage === 'statistiques' && (
+              <StatsPage
+                profile={profile}
+                sessions={sessions}
+                records={records}
+                goals={goals}
+                exercisePerformances={exercisePerformances}
+                exerciseBests={exerciseBests}
+              />
+            )}
+
+            {/* 7. Page Objectifs */}
+            {currentPage === 'objectifs' && (
+              <GoalsPage
+                goals={goals}
+                onAddGoal={handleAddGoal}
+                onUpdateGoal={handleUpdateGoal}
+                onDeleteGoal={handleDeleteGoal}
+                measurements={measurements}
+                sessions={sessions}
+                profile={profile}
+                records={records}
+                exercisePerformances={exercisePerformances}
+                exerciseBests={exerciseBests}
+              />
+            )}
+
+            {/* 8. Page Progression */}
+            {currentPage === 'progression' && (
+              <ProgressPage
+                measurements={measurements}
+                records={records}
+                onAddMeasurement={handleAddMeasurement}
+                onAddRecord={handleAddRecord}
+                exercisePerformances={exercisePerformances}
+                exerciseBests={exerciseBests}
+                activeProgram={programs.find((p) => p.isActive) || programs[0]}
+                onSaveProgram={handleSaveProgram}
+              />
+            )}
+
+            {/* 9. Page Paramètres */}
+            {currentPage === 'parametres' && (
+              <SettingsPage
+                profile={profile}
+                onUpdateProfile={handleUpdateProfile}
+                onReloadAllData={loadAllData}
+                onSettingsChange={(s) => setAnimationsEnabled(s.animationsEnabled)}
+              />
+            )}
+          </div>
+
+          {/* Frosted Glass Footer matching theme */}
+          <footer className="mt-10 bg-white/5 backdrop-blur-xl border border-white/10 rounded-2xl p-4 flex flex-col sm:flex-row items-center justify-between gap-3 text-zinc-400 text-xs">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="font-medium text-zinc-300">PWA 100% Hors-Ligne (Stockage Local IndexedDB)</span>
+            </div>
+            <div className="text-zinc-400 text-[11px]">
+              SportTrack • Suivi de musculation privé & autonome
+            </div>
+          </footer>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+function recordModeLabel(mode: NewRecordItem['mode']): string {
+  return mode === 'poids' ? 'poids' : mode === 'reps' ? 'répétitions' : 'durée';
+}
+
+function formatRecordValue(value: number, unit: string): string {
+  const rounded = Math.round(value * 10) / 10;
+  const text = Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+  const label = unit === 'rep' ? 'reps' : unit === 'kg' ? 'kg' : 'sec';
+  return `${text} ${label}`;
+}

@@ -1,0 +1,6 @@
+{
+  "name": "SportTrack",
+  "description": "Application personnelle de sport et musculation 100% hors ligne, gratuite et installable (PWA) avec suivi d'entraînement, statistiques et progression.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

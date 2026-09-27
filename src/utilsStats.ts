@@ -1,0 +1,339 @@
+import { WorkoutSession, ExercisePerformance } from './types';
+import { analyzeProgression, type ProgressionTrend } from './utilsProgression';
+
+// ----------------------------------------------------------------------------
+// LOT E — Pure period statistics over real session data.
+// All functions are read-only and deterministic. Rules follow the project
+// conventions (see hasValidCompletedSet in utilsSession.ts):
+//   - a "valid completed set" is completed === true AND (timer ? durationSec > 0
+//     : reps > 0);
+//   - reps are only ever counted from completed, non-timer sets (a timer set is
+//     counted separately and is NEVER converted into repetitions);
+//   - an exercise is counted once per period regardless of how many times it
+//     appears across sessions / sets (no double counting).
+// ----------------------------------------------------------------------------
+
+export type StatsPeriod = 'week' | 'month' | 'global';
+
+const toDateKey = (d: Date): string => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+
+// Monday-based start of the current calendar week (YYYY-MM-DD).
+export function startOfWeek(now: Date = new Date()): string {
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const mondayOffset = (d.getDay() + 6) % 7; // Sunday=0..Saturday=6 -> Monday=0
+  d.setDate(d.getDate() - mondayOffset);
+  return toDateKey(d);
+}
+
+// First day of the current calendar month (YYYY-MM-DD).
+export function startOfMonth(now: Date = new Date()): string {
+  return toDateKey(new Date(now.getFullYear(), now.getMonth(), 1));
+}
+
+// Inclusive start date for a period. Returns null for 'global' (no filter).
+export function periodStartDate(period: StatsPeriod, now: Date = new Date()): string | null {
+  switch (period) {
+    case 'week':
+      return startOfWeek(now);
+    case 'month':
+      return startOfMonth(now);
+    case 'global':
+    default:
+      return null;
+  }
+}
+
+// Filter sessions to a period using their real date (YYYY-MM-DD, lexical
+// comparison is chronological).
+export function filterSessionsByPeriod(sessions: WorkoutSession[], period: StatsPeriod, now: Date = new Date()): WorkoutSession[] {
+  const start = periodStartDate(period, now);
+  if (!start) return sessions;
+  return sessions.filter((s) => s.date >= start);
+}
+
+const isTimerMode = (mode: WorkoutSession['exercises'][number]['sets'][number]['mode']) => mode === 'timer';
+
+// Whether a single set counts as a validated effort for stats purposes.
+export function isValidCompletedSet(set: { completed: boolean; mode?: 'reps' | 'timer'; reps?: number; durationSec?: number }): boolean {
+  if (set.completed !== true) return false;
+  if (isTimerMode(set.mode)) return (set.durationSec || 0) > 0;
+  return (set.reps || 0) > 0;
+}
+
+export interface SessionPeriodStats {
+  sessions: number;
+  validatedSets: number;
+  repCount: number;
+  timerSetCount: number;
+  uniqueExercises: number;
+  stretchCount: number;
+  durationMinutes: number;
+}
+
+export function emptyPeriodStats(): SessionPeriodStats {
+  return {
+    sessions: 0,
+    validatedSets: 0,
+    repCount: 0,
+    timerSetCount: 0,
+    uniqueExercises: 0,
+    stretchCount: 0,
+    durationMinutes: 0,
+  };
+}
+
+// Aggregate counts for a set of sessions (already period-scoped by the caller).
+// Never produces negatives, NaN or division by zero.
+export function computePeriodStats(sessions: WorkoutSession[]): SessionPeriodStats {
+  const stats = emptyPeriodStats();
+  const exerciseIds = new Set<string>();
+
+  for (const s of sessions) {
+    stats.sessions += 1;
+    stats.stretchCount += s.stretchesCount || 0;
+    stats.durationMinutes += s.durationMinutes || 0;
+
+    for (const ex of s.exercises || []) {
+      if (ex.exerciseId) exerciseIds.add(ex.exerciseId);
+      for (const set of ex.sets || []) {
+        if (!isValidCompletedSet(set)) continue;
+        stats.validatedSets += 1;
+        if (isTimerMode(set.mode)) {
+          stats.timerSetCount += 1;
+        } else {
+          stats.repCount += set.reps || 0;
+        }
+      }
+    }
+  }
+
+  stats.uniqueExercises = exerciseIds.size;
+  return stats;
+}
+
+export interface ExercisePopularity {
+  exerciseId: string;
+  name: string;
+  sessionCount: number; // distinct sessions where the exercise appears
+  validatedSetCount: number; // total valid completed sets for that exercise
+}
+
+// Distinct exercises with their practice frequency, sorted by most practiced
+// (session count desc, then validated sets desc, then name). Reused for the
+// "top exercises" list and as the basis of the per-exercise selector.
+export function computeExercisePopularity(sessions: WorkoutSession[]): ExercisePopularity[] {
+  const byExercise = new Map<string, { name: string; sessionIds: Set<string>; setCount: number }>();
+
+  for (const s of sessions) {
+    for (const ex of s.exercises || []) {
+      if (!ex.exerciseId) continue;
+      let record = byExercise.get(ex.exerciseId);
+      if (!record) {
+        record = { name: ex.exerciseName || ex.exerciseId, sessionIds: new Set(), setCount: 0 };
+        byExercise.set(ex.exerciseId, record);
+      }
+      record.sessionIds.add(s.id);
+      for (const set of ex.sets || []) {
+        if (isValidCompletedSet(set)) record.setCount += 1;
+      }
+    }
+  }
+
+  return Array.from(byExercise.entries())
+    .map(([exerciseId, r]) => ({
+      exerciseId,
+      name: r.name,
+      sessionCount: r.sessionIds.size,
+      validatedSetCount: r.setCount,
+    }))
+    .sort((a, b) => b.sessionCount - a.sessionCount || b.validatedSetCount - a.validatedSetCount || a.name.localeCompare(b.name, 'fr'));
+}
+
+// ----------------------------------------------------------------------------
+// LOT III — Statistiques poussées (page Statistiques).
+// Pure, read-only helpers. Same conventions as above: real dates, real
+// completed sets, no invented data, no NaN / Infinity / division by zero.
+// ----------------------------------------------------------------------------
+
+// Local date from a YYYY-MM-DD key (avoids the UTC parsing pitfall of the
+// date-only constructor on machines with a negative UTC offset).
+const fromDateKey = (key: string): Date => {
+  const [y, m, d] = key.split('-').map(Number);
+  return new Date(y, (m || 1) - 1, d || 1);
+};
+
+// Monday-based calendar-week key (YYYY-MM-DD, the Monday) of a session date.
+const weekKeyOf = (date: string): string => startOfWeek(fromDateKey(date));
+
+// Month key YYYY-MM of a session date.
+const monthKeyOf = (date: string): string => (date || '').slice(0, 7);
+
+// Average number of sessions per active (non-empty) calendar week. Note: an
+// empty week is never counted, so the average reflects real training cadence
+// without inventing weeks the user simply did not train in.
+export function computeSessionsPerWeek(sessions: WorkoutSession[]): number {
+  if (!sessions || sessions.length === 0) return 0;
+  const weeks = new Set<string>();
+  for (const s of sessions) {
+    if (!s.date) continue;
+    weeks.add(weekKeyOf(s.date));
+  }
+  if (weeks.size === 0) return 0;
+  return Math.round((sessions.length / weeks.size) * 10) / 10;
+}
+
+// Average number of sessions per active (non-empty) calendar month.
+export function computeSessionsPerMonth(sessions: WorkoutSession[]): number {
+  if (!sessions || sessions.length === 0) return 0;
+  const months = new Set<string>();
+  for (const s of sessions) {
+    if (!s.date) continue;
+    months.add(monthKeyOf(s.date));
+  }
+  if (months.size === 0) return 0;
+  return Math.round((sessions.length / months.size) * 10) / 10;
+}
+
+// Sessions completed inside the current calendar week / month.
+export function countSessionsThisWeek(sessions: WorkoutSession[], now: Date = new Date()): number {
+  const start = startOfWeek(now);
+  return sessions.filter((s) => s.date >= start).length;
+}
+
+export function countSessionsThisMonth(sessions: WorkoutSession[], now: Date = new Date()): number {
+  const start = startOfMonth(now);
+  return sessions.filter((s) => s.date >= start).length;
+}
+
+// Same-period / previous-period aggregate comparison. Returns null for the
+// 'global' period (no meaningful reference period). Temporal boundaries are
+// REAL calendar weeks (Monday-based) and calendar months.
+export interface PeriodComparison {
+  current: SessionPeriodStats;
+  previous: SessionPeriodStats;
+  hasPrevious: boolean; // previous period contains at least one session
+}
+
+export function comparePeriodStats(
+  sessions: WorkoutSession[],
+  period: StatsPeriod,
+  now: Date = new Date()
+): PeriodComparison | null {
+  if (period === 'global') return null;
+  const start = periodStartDate(period, now);
+  if (!start) return null;
+
+  let prevStart: string;
+  if (period === 'week') {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const mondayOffset = (d.getDay() + 6) % 7;
+    d.setDate(d.getDate() - mondayOffset - 7);
+    prevStart = toDateKey(d);
+  } else {
+    const first = new Date(now.getFullYear(), now.getMonth(), 1);
+    prevStart = toDateKey(new Date(first.getFullYear(), first.getMonth() - 1, 1));
+  }
+
+  const current = computePeriodStats(sessions.filter((s) => s.date >= start));
+  const previous = computePeriodStats(sessions.filter((s) => s.date >= prevStart && s.date < start));
+  return { current, previous, hasPrevious: previous.sessions > 0 };
+}
+
+// Percentage evolution between a current and a previous value, protected against
+// division by zero (returns null when not computable).
+export function evolutionPercent(current: number, previous: number): number | null {
+  if (!Number.isFinite(current) || !Number.isFinite(previous)) return null;
+  if (previous === 0) return null;
+  return Math.round(((current - previous) / Math.abs(previous)) * 100);
+}
+
+// Trend of one exercise, reused directly to classify exercises into
+// progressing / stagnating / regressing overview lists.
+export interface ExerciseTrendItem {
+  exerciseId: string;
+  name: string;
+  trend: ProgressionTrend;
+  unit: string;
+  current: number; // last recorded value of the starred metric
+  previous: number | null;
+  best: number | null;
+}
+
+export interface ExerciseTrendGroups {
+  progressing: ExerciseTrendItem[];
+  stagnating: ExerciseTrendItem[];
+  regressing: ExerciseTrendItem[];
+}
+
+// Classify every exercise with a comparable history (analyzeProgression already
+// requires >= 2 comparable points before drawing any conclusion). Exercises with
+// an "insufficient" history are simply omitted — never labelled.
+export function classifyExerciseTrends(entries: ExercisePerformance[]): ExerciseTrendGroups {
+  const groups: ExerciseTrendGroups = { progressing: [], stagnating: [], regressing: [] };
+  const ids = new Set<string>();
+  for (const p of entries || []) {
+    if (p.exerciseId) ids.add(p.exerciseId);
+  }
+  for (const id of ids) {
+    const analysis = analyzeProgression(entries || [], id);
+    if (analysis.trend === 'insufficient') continue;
+    const sample = (entries || []).filter((e) => e.exerciseId === id);
+    const item: ExerciseTrendItem = {
+      exerciseId: id,
+      name: sample[sample.length - 1]?.exerciseName || id,
+      trend: analysis.trend,
+      unit: analysis.unit,
+      current: analysis.current,
+      previous: analysis.previous,
+      best: analysis.best,
+    };
+    if (analysis.trend === 'progressing') groups.progressing.push(item);
+    else if (analysis.trend === 'stagnating') groups.stagnating.push(item);
+    else groups.regressing.push(item);
+  }
+  const byName = (a: ExerciseTrendItem, b: ExerciseTrendItem) => a.name.localeCompare(b.name, 'fr');
+  return {
+    progressing: groups.progressing.sort(byName),
+    stagnating: groups.stagnating.sort(byName),
+    regressing: groups.regressing.sort(byName),
+  };
+}
+
+const MONTH_SHORT = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc'];
+
+export interface YearlyMonthTrend {
+  key: string; // YYYY-MM
+  label: string;
+  volumeKg: number;
+  sessions: number;
+  validatedSets: number;
+}
+
+// Monthly buckets (volume, sessions, validated sets) for one year, built ONLY
+// from months that actually contain sessions. Chronologically ordered.
+export function computeYearlyVolumeTrend(sessions: WorkoutSession[], year: number): YearlyMonthTrend[] {
+  const buckets = new Map<string, YearlyMonthTrend>();
+  for (const s of sessions || []) {
+    const key = (s.date || '').slice(0, 7);
+    if (!/^\d{4}-\d{2}$/.test(key)) continue;
+    if (Number(key.slice(0, 4)) !== year) continue;
+    let b = buckets.get(key);
+    if (!b) {
+      b = { key, label: MONTH_SHORT[Number(key.slice(5, 7)) - 1] || key, volumeKg: 0, sessions: 0, validatedSets: 0 };
+      buckets.set(key, b);
+    }
+    b.sessions += 1;
+    b.volumeKg += s.totalVolumeKg || 0;
+    for (const ex of s.exercises || []) {
+      for (const set of ex.sets || []) {
+        if (isValidCompletedSet(set)) b.validatedSets += 1;
+      }
+    }
+  }
+  return Array.from(buckets.values()).sort((a, b) => a.key.localeCompare(b.key));
+}
