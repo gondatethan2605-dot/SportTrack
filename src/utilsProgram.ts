@@ -1,4 +1,4 @@
-import { WorkoutProgram, WorkoutProgramDay, ProgramExerciseConfig, Exercise } from './types';
+import { WorkoutProgram, WorkoutProgramDay, ProgramExerciseConfig, Exercise, ProgramExerciseGroup } from './types';
 import { resolveSetRestSec, resolveTransitionRestSec } from './components/workout/workoutGuidedEngine';
 import { getWorkoutSettings } from './utilsSettings';
 
@@ -622,7 +622,7 @@ function isFiniteNumber(v: unknown): v is number {
 }
 
 // F.1 — Helpers de groupe (purs, sans mutation).
-
+ 
 export function getProgramDayGroups(day: WorkoutProgramDay): ProgramExerciseGroup[] {
   if (!day || !Array.isArray(day.groups)) return [];
   return [...day.groups];
@@ -635,7 +635,7 @@ export function getExerciseGroup(
   if (!day || !Array.isArray(day.exercises)) return undefined;
   const cfg = day.exercises.find((c) => c && c.exerciseId === exerciseId);
   if (!cfg || !cfg.groupId) return undefined;
-  return day.groups.find((g) => g && g.id === cfg.groupId);
+  return day.groups?.find((g) => g && g.id === cfg.groupId);
 }
 
 export function isExerciseGrouped(
@@ -650,17 +650,7 @@ export function getGroupExercises(
   day: WorkoutProgramDay
 ): ProgramExerciseConfig[] {
   if (!day || !Array.isArray(day.exercises)) return [];
-  const groupExs: ProgramExerciseConfig[] = [];
-  for (const cfg of day.exercises) {
-    if (cfg && cfg.groupId === groupExs.length > 0 ? cfg.groupId === groupId : false) {
-      // On vérifie simplement que cfg.groupId === groupId
-      // Mais attention : il faut vérifier que l'exercice appartient bien au groupe
-      // La logique correcte : on parcourt les exercices et on garde ceux dont groupId matches
-    }
-  }
-  // Reécriture correcte :
   const result: ProgramExerciseConfig[] = [];
-  if (!day || !Array.isArray(day.exercises)) return result;
   for (const cfg of day.exercises) {
     if (cfg && cfg.groupId === groupId) {
       result.push(cfg);

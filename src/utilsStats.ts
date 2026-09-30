@@ -1,4 +1,4 @@
-import { WorkoutSession, ExercisePerformance, PersonalRecord, MuscleGroup, WorkoutSet } from './types';
+import { WorkoutSession, ExercisePerformance, PersonalRecord, MuscleGroup, WorkoutSet, Exercise, ExerciseMode, ExercisePerformanceSet } from './types';
 import { analyzeProgression, type ProgressionTrend } from './utilsProgression';
 import { computeSessionXp } from './utilsXp';
 
@@ -637,7 +637,14 @@ export function computeMuscleGroupTrend(
         totalDurationSec: totalDuration,
         totalVolumeKg: totalVolume,
         weightUsedKg: maxWeight,
-        sets,
+        sets: completedSets.map((s) => ({
+          setNumber: s.setNumber,
+          weightKg: s.weightKg,
+          reps: s.reps,
+          mode: s.mode || 'reps',
+          durationSec: s.durationSec || 0,
+          completed: s.completed,
+        })),
         bestSet: completedSets.length > 0
           ? {
               setNumber: completedSets[0].setNumber,
@@ -725,38 +732,38 @@ export function isValidRPE(value: number): boolean {
 }
 
 // Moyenne RPE sur un ensemble de séries, ignorant les valeurs undefined.
-// Si aucune série ne possède de RPE, retourne null.
-export function computeAverageRPE(sets: WorkoutSet[]): number | null {
-  const validRpes = sets
-    .map((s) => s.rpe)
-    .filter((r): r is number => isValidRPE(r));
-  if (validRpes.length === 0) return null;
-  const sum = validRpes.reduce((acc, val) => acc + val, 0);
-  return Number((sum / validRpes.length).toFixed(1));
-}
+  // Si aucune série ne possède de RPE, retourne null.
+  export function computeAverageRPE(sets: WorkoutSet[]): number | null {
+    const validRpes = sets
+      .map((s) => s.rpe)
+      .filter((r): r is number => r !== undefined && isValidRPE(r));
+    if (validRpes.length === 0) return null;
+    const sum = validRpes.reduce((acc, val) => acc + val, 0);
+    return Number((sum / validRpes.length).toFixed(1));
+  }
 
 // Statistiques RPE complètes sur un ensemble de séries.
-// Ignore les séries sans RPE (undefined).
-export function computeRPEStats(sets: WorkoutSet[]): {
-  average: number | null;
-  count: number; // nombre de séries ayant un RPE valide
-  min: number | null;
-  max: number | null;
-} {
-  const validRpes = sets.map((s) => s.rpe).filter(isValidRPE);
-  const count = validRpes.length;
-  if (count === 0) {
-    return { average: null, count, min: null, max: null };
+  // Ignore les séries sans RPE (undefined).
+  export function computeRPEStats(sets: WorkoutSet[]): {
+    average: number | null;
+    count: number; // nombre de séries ayant un RPE valide
+    min: number | null;
+    max: number | null;
+  } {
+    const validRpes = sets.map((s) => s.rpe).filter((r): r is number => r !== undefined && isValidRPE(r));
+    const count = validRpes.length;
+    if (count === 0) {
+      return { average: null, count, min: null, max: null };
+    }
+    const sorted = [...validRpes].sort((a, b) => a - b);
+    const sum = sorted.reduce((acc, val) => acc + val, 0);
+    return {
+      average: Number((sum / count).toFixed(1)),
+      count,
+      min: sorted[0],
+      max: sorted[count - 1],
+    };
   }
-  const sorted = [...validRpes].sort((a, b) => a - b);
-  const sum = sorted.reduce((acc, val) => acc + val, 0);
-  return {
-    average: Number((sum / count).toFixed(1)),
-    count,
-    min: sorted[0],
-    max: sorted[count - 1],
-  };
-}
 
 export function computeMuscleGroupStats(
   sessions: WorkoutSession[],

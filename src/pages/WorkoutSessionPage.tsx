@@ -59,6 +59,7 @@ import {
   X,
   Info,
   Calculator,
+  Download,
 } from 'lucide-react';
 import { OneRMModal } from '../components/OneRMModal';
 
