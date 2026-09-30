@@ -271,30 +271,30 @@ export const WorkoutSessionPage: React.FC<WorkoutSessionPageProps> = ({
 
   // LOT E.4 — Export session image
   const handleExportSession = () => {
-    // Prepare session data for image generation
+    // Prepare session data for image generation (compute from live state)
     const totalSets = sessionExercises.reduce((acc, log) => acc + log.sets.length, 0);
     const completedSets = sessionExercises.reduce(
       (acc, log) => acc + log.sets.filter((s) => s.completed).length,
       0
     );
-    const volume = session.totalVolumeKg;
-    const durationMinutes = session.durationMinutes;
-    const exercisesCount = session.exercises.length;
-    const date = new Date(session.date);
+    const volume = sessionExercises.reduce((acc, log) => acc + (log.totalVolumeKg || 0), 0);
+    const durationMinutes = Math.round(elapsedSeconds / 60);
+    const exercisesCount = sessionExercises.length;
+    const date = new Date();
     const formattedDate = `${date.getDate()}/${date.getMonth() + 1}/${date.getFullYear()}`;
 
     // Calculate XP
-    const totalXP = session.stretchesCompleted
-      ? 250 + completedSets * 20 + session.stretchesCompleted * 25
+    const totalXP = completedStretchesCount > 0
+      ? 250 + completedSets * 20 + completedStretchesCount * 25
       : 0;
 
     // RPE stats
-    const rpeSets = session.exercises.flatMap((log) => log.sets.filter((s) => s.rpe !== undefined && s.rpe !== null));
+    const rpeSets = sessionExercises.flatMap((log) => log.sets.filter((s) => s.rpe !== undefined && s.rpe !== null));
     const averageRPE = rpeSets.length > 0 ? rpeSets.reduce((a, r) => a + r, 0) / rpeSets.length : null;
     const rpeCount = rpeSets.length;
 
     // Best exercises
-    const bestExercises = session.exercises
+    const bestExercises = sessionExercises
       .filter((log) => log.sets.some((s) => s.completed))
       .map((log) => ({
         name: log.exerciseName,
@@ -319,7 +319,7 @@ export const WorkoutSessionPage: React.FC<WorkoutSessionPageProps> = ({
     ctx.fillRect(40, 20, 40, 40); // placeholder icon
     ctx.fillStyle = 'white';
     ctx.fillText('SportTrack', 80, 40);
-    ctx.fillText(session.title || 'Séance', 80, 60);
+    ctx.fillText(sessionTitle || 'Séance', 80, 60);
 
     // Date
     ctx.fillStyle = 'white';
@@ -345,7 +345,7 @@ export const WorkoutSessionPage: React.FC<WorkoutSessionPageProps> = ({
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
-        link.download = `sporttrack-seance-${session.id}.png`;
+        link.download = `sporttrack-seance-${Date.now()}.png`;
         document.body.appendChild(link);
         link.click();
         setTimeout(() => {

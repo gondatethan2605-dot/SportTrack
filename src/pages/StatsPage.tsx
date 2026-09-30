@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { UserProfile, WorkoutSession, PersonalRecord, ExercisePerformance, ExerciseBest, Goal, MuscleGroup } from '../types';
+import { UserProfile, WorkoutSession, PersonalRecord, ExercisePerformance, ExerciseBest, Goal, MuscleGroup, Exercise } from '../types';
 import { computeMuscleGroupVolume, computeMuscleGroupFrequency, computeMuscleGroupTrend, computeMuscleGroupStats, getMuscleGroupExerciseNames, MuscleGroupList, computeAverageRPE, computeRPEStats } from '../utilsStats';
 import { computeBadges, nextBadgeToUnlock, mostRecentlyUnlockedBadge } from '../utilsBadges';
 import { computeChallengeProgress, computeWeekKey } from '../utilsChallenges';
@@ -1230,11 +1230,11 @@ export const StatsPage: React.FC<StatsPageProps> = ({
                 <div>
                   <div className="text-zinc-400 text-xs uppercase tracking-wider">Moyenne</div>
                   <div className="font-display text-3xl font-bold text-white">
-                    {scopedSessions.length > 0
+{scopedSessions.length > 0
                       ? computeAverageRPE(
                         scopedSessions.flatMap((s) => s.exercises.map((log) => log.sets)).flat()
                       )
-                    : ('—' / 10)}
+                      : null}
                 </div>
                 <div>
                   <div className="text-zinc-400 text-xs uppercase tracking-wider">Séries renseignées</div>

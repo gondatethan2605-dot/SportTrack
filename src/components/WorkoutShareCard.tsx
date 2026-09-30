@@ -40,8 +40,8 @@ export const WorkoutShareCard: React.FC<WorkoutShareCardProps> = ({
   const rpeCount = showRPE && rpeStats ? rpeStats.count : 0;
 
   // XP total
-  const totalXP = session.stretchesCompleted
-    ? 250 + (completedSets - totalSets + totalSets) * 20 + (session.stretchesCompleted * 25)
+  const totalXP = (session.stretchesCount ?? 0) > 0
+    ? 250 + completedSets * 20 + (session.stretchesCount ?? 0) * 25
     : 0;
 
   // Records simplifiés

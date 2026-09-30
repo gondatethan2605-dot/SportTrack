@@ -4,6 +4,7 @@ import {
   Exercise,
   WorkoutProgramDay,
   ProgramExerciseConfig,
+  ProgramExerciseGroup,
   DayOfWeek,
   ExerciseDifficulty,
   MuscleGroup,
