@@ -502,7 +502,7 @@ export const MuscleGroupList: readonly MuscleGroup[] = [
 ];
 
 // Vérifie si une chaîne de caractères correspond à une valeur MuscleGroup valide.
-function isValidMuscleGroup(value: string): value is MuscleGroup {
+export function isValidMuscleGroup(value: string): value is MuscleGroup {
   return MuscleGroupList.includes(value as MuscleGroup);
 }
 

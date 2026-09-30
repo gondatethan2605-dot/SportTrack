@@ -1,4 +1,5 @@
 // Test d'historique inexistant
+import { describe, test, expect } from 'vitest';
 import {
   computeMuscleGroupVolume,
   computeMuscleGroupFrequency,
@@ -17,6 +18,7 @@ describe('LOT E.2 — Muscle Group Statistics', () => {
     id: 's1',
     title: 'Test',
     date: '2024-01-15',
+    startTime: '10:00',
     durationMinutes: 60,
     guided: false,
     stretchesCompleted: 0,
@@ -29,7 +31,6 @@ describe('LOT E.2 — Muscle Group Statistics', () => {
       sets: ex.sets,
     })),
     totalVolumeKg: 0,
-    guided: false,
     feeling: 'normal' as const,
     notes: '',
   });
@@ -227,7 +228,7 @@ describe('LOT E.2 — Muscle Group Statistics', () => {
       expect(typeof stats.volume).toBe('number');
       expect(typeof stats.frequency).toBe('number');
       expect(typeof stats.exerciseCount).toBe('number');
-      expect(stats.trend).toBeOneOf('progressing', 'stagnating', 'regressing', 'insufficient');
+      expect(['progressing', 'stagnating', 'regressing', 'insufficient']).toContain(stats.trend);
     });
 
     test('volume is total weight*reps', () => {
@@ -257,8 +258,6 @@ describe('LOT E.2 — Muscle Group Statistics', () => {
     const sessionsWithExercises = [
       createMockSession([
         { muscleGroup: 'Pectoraux', sets: [{ completed: true, mode: 'reps', reps: 10, weightKg: 80 }] },
-      ]),
-      createMockSession([
         { muscleGroup: 'Pectoraux', sets: [{ completed: true, mode: 'reps', reps: 8, weightKg: 90 }] },
       ]),
     ];
@@ -266,6 +265,7 @@ describe('LOT E.2 — Muscle Group Statistics', () => {
     test('returns unique exercise names for a group', () => {
       const names = getMuscleGroupExerciseNames(sessionsWithExercises, pectoraux, mockExercisesById);
       expect(names).toContain('Développé couché');
+      expect(names).toContain('Rowing');
       expect(names).toHaveLength(2);
     });
 
