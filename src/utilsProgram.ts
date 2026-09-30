@@ -1,4 +1,4 @@
-import { WorkoutProgram, WorkoutProgramDay, ProgramExerciseConfig } from './types';
+import { WorkoutProgram, WorkoutProgramDay, ProgramExerciseConfig, Exercise } from './types';
 import { resolveSetRestSec, resolveTransitionRestSec } from './components/workout/workoutGuidedEngine';
 import { getWorkoutSettings } from './utilsSettings';
 
@@ -399,4 +399,324 @@ export function getProgramSummary(program: WorkoutProgram | undefined) {
   const totalDurationSec = days.reduce((a, d) => a + estimateDayDurationSec(d.day), 0);
   const totalDurationMin = Math.max(0, Math.round(totalDurationSec / 60));
   return { totalExercises, totalSets, totalDurationSec, totalDurationMin, days };
+}
+
+// ---------------------------------------------------------------
+// LOT D — Remplacement intelligent d'exercice
+// ---------------------------------------------------------------
+
+export interface ReplacementSuggestion {
+  exercise: Exercise;
+  score: number; // 0-100, higher = better match
+  reasons: string[]; // Why this exercise was suggested
+}
+
+interface ReplacementScore {
+  exercise: Exercise;
+  score: number;
+  reasons: string[];
+}
+
+function computeReplacementScore(
+  source: ProgramExerciseConfig,
+  candidate: Exercise,
+  catalog: Exercise[]
+): ReplacementScore {
+  let score = 0;
+  const reasons: string[] = [];
+
+  // 1. Muscle principal (poids fort)
+  if (candidate.primaryMuscle === source.exerciseName) {
+    // Not applicable - source is config, candidate is Exercise
+  }
+  const sourceEx = catalog.find((e) => e.id === source.exerciseId);
+  if (sourceEx) {
+    if (candidate.primaryMuscle === sourceEx.primaryMuscle) {
+      score += 35;
+      reasons.push(`Même muscle principal (${candidate.primaryMuscle})`);
+    }
+    // Secondary muscles overlap
+    const secOverlap = (sourceEx.secondaryMuscles || []).filter((m) =>
+      (candidate.secondaryMuscles || []).includes(m)
+    ).length;
+    if (secOverlap > 0) {
+      score += secOverlap * 5;
+      reasons.push(`${secOverlap} muscle(s) secondaire(s) commun(s)`);
+    }
+    // Equipment match
+    if (candidate.equipment === sourceEx.equipment) {
+      score += 15;
+      reasons.push(`Même équipement (${candidate.equipment})`);
+    }
+    // Category match
+    if (candidate.category === sourceEx.category) {
+      score += 10;
+      reasons.push(`Même catégorie (${candidate.category})`);
+    }
+    // Body part match
+    if (candidate.bodyPart === sourceEx.bodyPart) {
+      score += 10;
+      reasons.push(`Même zone (${candidate.bodyPart})`);
+    }
+    // Difficulty proximity
+    const diffOrder = { Débutant: 0, Intermédiaire: 1, Avancé: 2, 'Tous niveaux': 3 };
+    const srcDiff = diffOrder[sourceEx.difficulty] ?? 1;
+    const candDiff = diffOrder[candidate.difficulty] ?? 1;
+    const diffGap = Math.abs(srcDiff - candDiff);
+    if (diffGap === 0) {
+      score += 10;
+      reasons.push(`Même difficulté (${candidate.difficulty})`);
+    } else if (diffGap === 1) {
+      score += 5;
+      reasons.push(`Difficulté proche (${candidate.difficulty})`);
+    }
+  }
+
+  // Base score for being a valid alternative
+  score += 5;
+  reasons.push('Alternative valide');
+
+  return { exercise: candidate, score: Math.min(100, score), reasons };
+}
+
+// Renvoie les meilleures suggestions de remplacement pour un exercice donné,
+// triées par score décroissant. Exclut l'exercice source lui-même.
+export function getReplacementSuggestions(
+  sourceConfig: ProgramExerciseConfig,
+  catalog: Exercise[],
+  limit = 5
+): ReplacementSuggestion[] {
+  const sourceEx = catalog.find((e) => e.id === sourceConfig.exerciseId);
+  if (!sourceEx) return [];
+
+  const candidates = catalog.filter(
+    (e) => e.id !== sourceConfig.exerciseId
+  );
+
+  const scored = candidates.map((c) => computeReplacementScore(sourceConfig, c, catalog))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit);
+
+  return scored.map((s) => ({
+    exercise: s.exercise,
+    score: s.score,
+    reasons: s.reasons,
+  }));
+}
+
+// LOT D — Remplace un exercice dans un programme en conservant la configuration
+// compatible. Retourne le programme mis à jour.
+export interface ReplaceExerciseResult {
+  program: WorkoutProgram;
+  changed: boolean;
+  modeChanged: boolean;
+  preservedFields: string[];
+  resetFields: string[];
+}
+
+export function replaceExerciseInProgram(
+  program: WorkoutProgram,
+  dayId: string,
+  configId: string,
+  newExercise: Exercise,
+  catalog: Exercise[]
+): ReplaceExerciseResult {
+  if (!program || !Array.isArray(program.days)) {
+    return { program, changed: false, modeChanged: false, preservedFields: [], resetFields: [] };
+  }
+
+  const day = program.days.find((d) => d.id === dayId);
+  if (!day || !Array.isArray(day.exercises)) {
+    return { program, changed: false, modeChanged: false, preservedFields: [], resetFields: [] };
+  }
+
+  const configIndex = day.exercises.findIndex((c) => c.id === configId);
+  if (configIndex === -1) {
+    return { program, changed: false, modeChanged: false, preservedFields: [], resetFields: [] };
+  }
+
+  const oldConfig = day.exercises[configIndex];
+  const oldMode = oldConfig.mode ?? 'reps';
+  const newMode = newExercise.category === 'Étirements' ? 'timer' : 'reps'; // Heuristic
+  const modeChanged = oldMode !== newMode;
+
+  // Determine which fields to preserve vs reset
+  const preserved: string[] = [];
+  const reset: string[] = [];
+
+  const newConfig: ProgramExerciseConfig = {
+    ...oldConfig,
+    id: oldConfig.id, // Keep same config ID
+    exerciseId: newExercise.id,
+    exerciseName: newExercise.name,
+  };
+
+  // Same mode: preserve everything possible
+  if (!modeChanged) {
+    if (oldConfig.mode === 'reps') {
+      // Preserve repsPlan, sets, restSec, targetWeightKg, restPlan, notes, transitionRestSec
+      preserved.push('repsPlan', 'sets', 'restSec', 'targetWeightKg', 'restPlan', 'notes', 'transitionRestSec');
+      newConfig.reps = newExercise.defaultReps;
+      newConfig.repsPlan = Array.from({ length: oldConfig.sets }, () => newExercise.defaultReps);
+    } else {
+      // Timer mode: preserve durationPlan, sets, restSec, restPlan, notes, transitionRestSec
+      preserved.push('durationPlan', 'sets', 'restSec', 'restPlan', 'notes', 'transitionRestSec');
+      newConfig.durationSec = newExercise.defaultReps as number; // defaultReps holds duration for stretches
+      newConfig.durationPlan = Array.from({ length: oldConfig.sets }, () => newExercise.defaultReps as number);
+    }
+    // restSec: try to keep if compatible
+    newConfig.restSec = oldConfig.restSec;
+  } else {
+    // Mode changed: REPS <-> TIMER
+    // NE PAS CONVERTIR automatiquement
+    reset.push('repsPlan', 'durationPlan', 'reps', 'durationSec');
+    newConfig.mode = newMode;
+    if (newMode === 'reps') {
+      newConfig.reps = newExercise.defaultReps;
+      newConfig.repsPlan = Array.from({ length: oldConfig.sets }, () => newExercise.defaultReps);
+      newConfig.durationSec = 0;
+      newConfig.durationPlan = Array.from({ length: oldConfig.sets }, () => 0);
+    } else {
+      newConfig.durationSec = newExercise.defaultReps as number;
+      newConfig.durationPlan = Array.from({ length: oldConfig.sets }, () => newExercise.defaultReps as number);
+      newConfig.reps = `${newExercise.defaultReps} sec`;
+      newConfig.repsPlan = Array.from({ length: oldConfig.sets }, () => `${newExercise.defaultReps} sec`);
+    }
+    // Preserve compatible fields
+    preserved.push('sets', 'targetWeightKg', 'notes');
+    if (isFiniteNumber(oldConfig.restSec)) {
+      newConfig.restSec = oldConfig.restSec;
+      preserved.push('restSec');
+    }
+    if (isFiniteNumber(oldConfig.transitionRestSec)) {
+      newConfig.transitionRestSec = oldConfig.transitionRestSec;
+      preserved.push('transitionRestSec');
+    }
+  }
+
+  const updatedExercises = [...day.exercises];
+  updatedExercises[configIndex] = newConfig;
+
+  const updatedDay = {
+    ...day,
+    exercises: updatedExercises,
+    exerciseIds: updatedExercises.map((c) => c.exerciseId),
+  };
+
+  const updatedProgram = {
+    ...program,
+    days: program.days.map((d) => (d.id === dayId ? updatedDay : d)),
+  };
+
+  return {
+    program: updatedProgram,
+    changed: true,
+    modeChanged,
+    preservedFields: preserved,
+    resetFields: reset,
+  };
+}
+
+function isFiniteNumber(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v);
+}
+
+// F.1 — Helpers de groupe (purs, sans mutation).
+
+export function getProgramDayGroups(day: WorkoutProgramDay): ProgramExerciseGroup[] {
+  if (!day || !Array.isArray(day.groups)) return [];
+  return [...day.groups];
+}
+
+export function getExerciseGroup(
+  exerciseId: string,
+  day: WorkoutProgramDay
+): ProgramExerciseGroup | undefined {
+  if (!day || !Array.isArray(day.exercises)) return undefined;
+  const cfg = day.exercises.find((c) => c && c.exerciseId === exerciseId);
+  if (!cfg || !cfg.groupId) return undefined;
+  return day.groups.find((g) => g && g.id === cfg.groupId);
+}
+
+export function isExerciseGrouped(
+  exerciseId: string,
+  day: WorkoutProgramDay
+): boolean {
+  return getExerciseGroup(exerciseId, day) !== undefined;
+}
+
+export function getGroupExercises(
+  groupId: string,
+  day: WorkoutProgramDay
+): ProgramExerciseConfig[] {
+  if (!day || !Array.isArray(day.exercises)) return [];
+  const groupExs: ProgramExerciseConfig[] = [];
+  for (const cfg of day.exercises) {
+    if (cfg && cfg.groupId === groupExs.length > 0 ? cfg.groupId === groupId : false) {
+      // On vérifie simplement que cfg.groupId === groupId
+      // Mais attention : il faut vérifier que l'exercice appartient bien au groupe
+      // La logique correcte : on parcourt les exercices et on garde ceux dont groupId matches
+    }
+  }
+  // Reécriture correcte :
+  const result: ProgramExerciseConfig[] = [];
+  if (!day || !Array.isArray(day.exercises)) return result;
+  for (const cfg of day.exercises) {
+    if (cfg && cfg.groupId === groupId) {
+      result.push(cfg);
+    }
+  }
+  return result;
+}
+
+export function validateProgramGroups(day: WorkoutProgramDay): string[] {
+  const errors: string[] = [];
+  if (!day) return errors;
+
+  // Vérifier chaque exercice ayant un groupId
+  if (day.exercises && Array.isArray(day.exercises)) {
+    // Regrouper les exercices par groupId
+    const groupExMap: Record<string, ProgramExerciseConfig[]> = {};
+    for (const cfg of day.exercises) {
+      if (cfg && cfg.groupId) {
+        if (!groupExMap[cfg.groupId]) groupExMap[cfg.groupId] = [];
+        groupExMap[cfg.groupId].push(cfg);
+      }
+    }
+
+    // Pour chaque groupe, valider
+    for (const [groupId, exs] of Object.entries(groupExMap)) {
+      if (!groupId || groupId.trim() === '') {
+        errors.push('groupId vide');
+      }
+      if (exs.length < 2) {
+        errors.push(`groupe "${groupId}" contient ${exs.length} exercice(s), minimum 2 requis`);
+      }
+      // Vérifier le type du groupe s'il existe
+      const group = day.groups?.find((g) => g && g.id === groupId);
+      if (group) {
+        if (group.type !== 'superset' && group.type !== 'circuit') {
+          errors.push(`groupe "${groupId}" a un type invalide: ${group.type}`);
+        }
+        if (group.rounds !== undefined && group.rounds <= 0) {
+          errors.push(`groupe "${groupId}" a rounds <= 0`);
+        }
+        if (group.restBetweenExercisesSec !== undefined && group.restBetweenExercisesSec < 0) {
+          errors.push(`groupe "${groupId}" a reposBetweenExercisesSec négatif`);
+        }
+        if (group.restBetweenRoundsSec !== undefined && group.restBetweenRoundsSec < 0) {
+          errors.push(`groupe "${groupId}" a reposBetweenRoundsSec négatif`);
+        }
+      }
+      // Vérifier que chaque exercice avec groupId a un groupe correspondant
+      for (const ex of exs) {
+        const g = day.groups?.find((gg) => gg && gg.id === ex.groupId);
+        if (!g) {
+          errors.push(`exercice ${ex.exerciseId} a groupId "${ex.groupId}" mais aucun groupe correspondant`);
+        }
+      }
+    }
+  }
+
+  return errors;
 }

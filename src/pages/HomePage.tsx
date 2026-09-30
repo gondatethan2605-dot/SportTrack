@@ -36,7 +36,6 @@ import {
   Dumbbell,
   Sparkles,
   Activity,
-  Layers,
   Flame as FlameIcon,
   X,
   Medal,
@@ -481,13 +480,16 @@ export const HomePage: React.FC<HomePageProps> = ({
       case 'next-session':
         return (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 sm:col-span-2 lg:col-span-12">
-            {/* Next Workout Card */}
+            {/* Next Workout Card — LOT 11: no longer a duplicate of the hero (which now
+              carries the primary "Commencer" action). This block gives the
+              concrete PLAN: the day's exercise-by-exercise list + quick links.
+              No reps<->duration conversion is ever shown here. */}
             <div data-testid="home-next-session" className="lg:col-span-7 sport-card rounded-3xl p-6 space-y-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <div className="w-2.5 h-2.5 rounded-full bg-violet-400 animate-pulse" />
                   <h2 className="font-display text-2xl font-bold uppercase tracking-wider text-white">
-                    Prochaine Séance
+                    Plan de la séance
                   </h2>
                 </div>
                 <span className="text-xs font-semibold text-violet-300 bg-white/10 backdrop-blur-md border border-white/15 px-3 py-1 rounded-xl">
@@ -518,11 +520,38 @@ export const HomePage: React.FC<HomePageProps> = ({
                       <span className="text-[11px] text-zinc-400 block mt-1">
                         {nextSession.exerciseCount} {nextSession.exerciseCount > 1 ? 'exercices' : 'exercice'}
                       </span>
-                      <span className="text-[11px] text-zinc-400 flex items-center gap-1 justify-end mt-0.5">
-                        <Layers className="w-3 h-3 text-violet-400" /> {nextSession.setCount} {nextSession.setCount > 1 ? 'séries' : 'série'}
-                      </span>
                     </div>
                   </div>
+
+                  {/* Exercise-by-exercise plan of the day */}
+                  {Array.isArray(nextSession.day.exercises) && nextSession.day.exercises.length > 0 && (
+                    <ol className="space-y-1.5">
+                      {nextSession.day.exercises.map((cfg, i) => {
+                        const isTimer = cfg.mode === 'timer';
+                        const dur = cfg.durationSec ?? cfg.durationPlan?.[0];
+                        const reps = cfg.reps ?? cfg.repsPlan?.[0] ?? '';
+                        const target = isTimer
+                          ? `${dur != null ? dur : '—'} s`
+                          : `${reps} rep${!Number.isNaN(Number(reps)) && Number(reps) > 1 ? 's' : ''}`;
+                        return (
+                          <li
+                            key={cfg.id ?? i}
+                            className="flex items-center justify-between gap-3 rounded-xl bg-black/20 border border-white/5 px-3 py-2"
+                          >
+                            <span className="flex items-center gap-2.5 min-w-0">
+                              <span className="w-5 h-5 rounded-lg bg-violet-600/30 text-violet-200 text-[10px] font-bold flex items-center justify-center shrink-0">
+                                {i + 1}
+                              </span>
+                              <span className="text-sm font-semibold text-zinc-100 truncate">{cfg.exerciseName}</span>
+                            </span>
+                            <span className="text-xs font-bold text-violet-200 shrink-0">
+                              {cfg.sets} × <span className="text-white">{target}</span>
+                            </span>
+                          </li>
+                        );
+                      })}
+                    </ol>
+                  )}
 
                   {/* Warm-up hint (LOT G, presentational, no migration) */}
                   <div data-testid="home-warm-up" className="flex items-center gap-2.5 bg-emerald-500/10 border border-emerald-500/20 rounded-xl px-3 py-2">
@@ -532,24 +561,6 @@ export const HomePage: React.FC<HomePageProps> = ({
                       <span className="mx-1.5 text-emerald-400/60">•</span>
                       <span data-testid="home-warm-up-minutes">{warmUp.minutes} min</span>
                     </div>
-                  </div>
-
-                  <div className="border-t border-white/10 pt-3.5 flex items-center justify-between gap-3 flex-wrap">
-                    <div className="text-xs text-zinc-400">
-                      <span className="text-zinc-300 font-medium">{nextSession.day.muscleGroups.join(', ')}</span>
-                      {nextSession.day.stretches && nextSession.day.stretches.length > 0 && (
-                        <span className="text-violet-300"> • +{nextSession.day.stretches.length} étirements</span>
-                      )}
-                    </div>
-                    <button
-                      id="btn-start-next-day"
-                      onClick={() => onStartSession(nextSession.day.id)}
-                      data-testid="home-start-session-day"
-                      className="flex items-center gap-1.5 bg-violet-600 hover:bg-violet-500 text-white font-bold text-xs uppercase tracking-wider px-5 py-2.5 rounded-xl transition-all shadow-md"
-                    >
-                      <Play className="w-3 h-3 fill-white" />
-                      <span>Commencer</span>
-                    </button>
                   </div>
                 </div>
               ) : (
@@ -804,29 +815,68 @@ export const HomePage: React.FC<HomePageProps> = ({
 
   return (
     <div id="page-home" data-testid="home-page" className="space-y-6 max-w-5xl mx-auto pb-8">
-      {/* Hero Action: Motivating Header + Big START WORKOUT Button */}
+      {/* Hero — Action du jour (LOT 11): describes TODAY's session at a glance
+          and gives ONE clear primary action. Decorative copy was removed so the
+          essential information (name, exercises, duration, muscles) is read
+          immediately. */}
       <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-violet-600 to-indigo-700 p-6 sm:p-8 shadow-2xl shadow-violet-900/25">
         {/* Background frosted glow circles */}
         <div className="absolute top-0 right-0 w-80 h-80 bg-white/10 rounded-full blur-3xl pointer-events-none -mr-20 -mt-20" />
         <div className="absolute bottom-0 left-0 w-64 h-64 bg-indigo-900/30 rounded-full blur-2xl pointer-events-none -ml-20 -mb-20" />
 
-        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
-          <div className="space-y-2.5">
-            <div className="flex items-center gap-2">
+        <div className="relative z-10 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+          <div className="space-y-3 min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
               <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-white/20 backdrop-blur-md text-white border border-white/20">
-                <Sparkles className="w-3.5 h-3.5 text-white" />
-                Prêt pour l'effort
+                <Zap className="w-3.5 h-3.5 text-white" />
+                {nextSession && todayPlannedDay && nextSession.day.id === todayPlannedDay.id
+                  ? "AUJOURD'HUI"
+                  : 'PROCHAINE SÉANCE'}
               </span>
+              {nextSession && (
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider bg-violet-500/30 text-violet-200 border border-violet-500/40">
+                  <Calendar className="w-3.5 h-3.5" />
+                  {nextSession.day.dayOfWeek}
+                </span>
+              )}
               <span className="text-xs text-white/80 font-medium capitalize">
                 {new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}
               </span>
             </div>
-            <h1 className="font-display text-4xl sm:text-5xl font-bold uppercase tracking-wide text-white leading-tight">
-              Dépasse tes limites, {profile.name}
-            </h1>
-            <p className="text-sm text-white/85 max-w-lg leading-relaxed">
-              Votre progression se construit chaque jour. Données privées stockées localement sur votre téléphone ou ordinateur.
-            </p>
+
+            {nextSession ? (
+              <>
+                <h1 className="font-display text-3xl sm:text-4xl font-bold uppercase tracking-wide text-white leading-tight">
+                  {nextSession.name}
+                </h1>
+                <p className="text-sm text-white/85 max-w-xl leading-relaxed flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="font-semibold text-white">
+                    {nextSession.exerciseCount} exercice{nextSession.exerciseCount > 1 ? 's' : ''}
+                  </span>
+                  <span className="text-white/50">&bull;</span>
+                  <span>{nextSession.setCount} série{nextSession.setCount > 1 ? 's' : ''}</span>
+                  <span className="text-white/50">&bull;</span>
+                  <span>~{nextSession.durationMin} min</span>
+                  <span className="text-white/50">&bull;</span>
+                  <span>{nextSession.day.muscleGroups.join(', ')}</span>
+                  {nextSession.day.stretches && nextSession.day.stretches.length > 0 && (
+                    <>
+                      <span className="text-white/50">&bull;</span>
+                      <span>+{nextSession.day.stretches.length} étirement{nextSession.day.stretches.length > 1 ? 's' : ''}</span>
+                    </>
+                  )}
+                </p>
+              </>
+            ) : (
+              <>
+                <h1 className="font-display text-3xl sm:text-4xl font-bold uppercase tracking-wide text-white leading-tight">
+                  Prêt pour une séance ?
+                </h1>
+                <p className="text-sm text-white/85 max-w-lg leading-relaxed">
+                  Aucune séance programmée. Lancez une séance rapide ou choisissez un programme.
+                </p>
+              </>
+            )}
           </div>
 
           {/* Primary CTA: COMMENCER LA SÉANCE */}
@@ -835,12 +885,12 @@ export const HomePage: React.FC<HomePageProps> = ({
               id="btn-start-session-hero"
               data-testid="home-start-session"
               onClick={() => onStartSession(nextSession?.day.id)}
-              className="group relative flex items-center justify-center gap-3 bg-white text-violet-700 hover:bg-zinc-100 font-bold text-base uppercase tracking-wider px-8 py-4 rounded-2xl shadow-xl hover:scale-[1.02] active:scale-[0.98] transition-all"
+              className="group relative flex items-center justify-center gap-3 bg-white text-violet-700 hover:bg-zinc-100 font-bold text-base uppercase tracking-wider px-8 py-4 rounded-2xl shadow-xl hover:scale-[1.02] active:scale-[0.98] transition-all min-w-[280px]"
             >
               <div className="w-8 h-8 rounded-xl bg-violet-100 flex items-center justify-center">
                 <Play className="w-4 h-4 fill-violet-700 text-violet-700 group-hover:scale-110 transition-transform" />
               </div>
-                            <span className="font-display text-xl font-bold tracking-widest text-violet-900">COMMENCER LA SÉANCE</span>
+              <span className="font-display text-xl font-bold tracking-widest text-violet-900">COMMENCER LA SÉANCE</span>
             </button>
 
             <button

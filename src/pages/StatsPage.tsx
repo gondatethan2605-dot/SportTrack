@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
-import { UserProfile, WorkoutSession, PersonalRecord, ExercisePerformance, ExerciseBest, Goal } from '../types';
+import { UserProfile, WorkoutSession, PersonalRecord, ExercisePerformance, ExerciseBest, Goal, MuscleGroup } from '../types';
+import { computeMuscleGroupVolume, computeMuscleGroupFrequency, computeMuscleGroupTrend, computeMuscleGroupStats, getMuscleGroupExerciseNames, MuscleGroupList, computeAverageRPE, computeRPEStats } from '../utilsStats';
 import { computeBadges, nextBadgeToUnlock, mostRecentlyUnlockedBadge } from '../utilsBadges';
 import { computeChallengeProgress, computeWeekKey } from '../utilsChallenges';
 import {
@@ -204,20 +205,53 @@ export const StatsPage: React.FC<StatsPageProps> = ({
     return rows.sort((a, b) => b.value - a.value).slice(0, 5);
   }, [exerciseBests]);
 
-  // Existing volume / duration aggregates.
-  const totalVolume = scopedSessions.reduce((acc, s) => acc + s.totalVolumeKg, 0);
-  const totalMinutes = scopedSessions.reduce((acc, s) => acc + (s.durationMinutes || 0), 0);
-  const avgDuration = scopedSessions.length ? Math.round(totalMinutes / scopedSessions.length) : 0;
-
-  // Muscle group frequency.
-  const muscleCounts: Record<string, number> = {};
-  scopedSessions.forEach((s) => {
-    s.exercises.forEach((ex) => {
-      muscleCounts[ex.muscleGroup] = (muscleCounts[ex.muscleGroup] || 0) + 1;
+  // Existing volume / duration aggregates + muscle-group frequency.
+  // LOT 13: grouped into one useMemo so a lower-frequency object change
+  // (state refresh, period switch) reuses the previous computations.
+  const { totalVolume, totalMinutes, avgDuration, muscleEntries, maxMuscleCount } = useMemo(() => {
+    const volume = scopedSessions.reduce((acc, s) => acc + s.totalVolumeKg, 0);
+    const minutes = scopedSessions.reduce((acc, s) => acc + (s.durationMinutes || 0), 0);
+    const muscleCounts: Record<string, number> = {};
+    scopedSessions.forEach((s) => {
+      s.exercises.forEach((ex) => {
+        muscleCounts[ex.muscleGroup] = (muscleCounts[ex.muscleGroup] || 0) + 1;
+      });
     });
-  });
-  const muscleEntries = Object.entries(muscleCounts).sort((a, b) => b[1] - a[1]);
-  const maxMuscleCount = muscleEntries[0]?.[1] || 1;
+    const entries = Object.entries(muscleCounts).sort((a, b) => b[1] - a[1]);
+    return {
+      totalVolume: volume,
+      totalMinutes: minutes,
+      avgDuration: scopedSessions.length ? Math.round(minutes / scopedSessions.length) : 0,
+      muscleEntries: entries,
+      maxMuscleCount: entries[0]?.[1] || 1,
+    };
+  }, [scopedSessions]);
+
+  // LOT E.2 — Selected muscle group for detailed stats.
+  const [selectedMuscleGroup, setSelectedMuscleGroup] = useState<MuscleGroup | null>(null);
+
+  // Exercice ID → Exercise name mapping, built from scoped sessions.
+  // Required by computeMuscleGroupStats / getMuscleGroupExerciseNames.
+  const exercisesById = useMemo(() => {
+    const map: Record<string, Exercise> = {};
+    scopedSessions.forEach((s) => {
+      s.exercises.forEach((ex) => {
+        if (ex.exerciseId && !map[ex.exerciseId]) {
+          map[ex.exerciseId] = ex;
+        }
+      });
+    });
+    return map;
+  }, [scopedSessions]);
+
+  // Detailed stats for the selected muscle group (computed from period-filtered sessions).
+  const muscleGroupStats = useMemo(() => {
+    if (!selectedMuscleGroup) return null;
+    return computeMuscleGroupStats(scopedSessions, selectedMuscleGroup, exercisesById);
+  }, [selectedMuscleGroup, scopedSessions, exercisesById]);
+
+  // List of muscle group pills for the selector (deterministic order from the enum).
+  const muscleGroupOptions = useMemo(() => MuscleGroupList, []);
 
   // Per-exercise selector (exercises present in scoped performances).
   const exerciseOptions = useMemo(() => {
@@ -1075,7 +1109,7 @@ export const StatsPage: React.FC<StatsPageProps> = ({
             <span className="text-xs text-zinc-400">Fréquence</span>
           </div>
 
-          <div className="space-y-3 pt-2">
+<div className="space-y-3 pt-2">
             {muscleEntries.length === 0 ? (
               <div className="text-center py-8 px-4 rounded-2xl bg-white/5 border border-white/5 text-zinc-400 text-xs">
                 <Dumbbell className="w-8 h-8 mx-auto mb-2 text-zinc-500 opacity-60" />
@@ -1101,18 +1135,138 @@ export const StatsPage: React.FC<StatsPageProps> = ({
                 );
               })
             )}
-          </div>
+</div>
         </div>
 
-        {/* Level Progression & Gamification Ladder (5 Cols) */}
-        <div className="lg:col-span-5 sport-card rounded-3xl p-6 space-y-4">
-          <div className="flex items-center gap-2">
-            <Zap className="w-5 h-5 text-violet-400" />
-            <h2 className="font-display text-2xl font-bold uppercase tracking-wider text-white">
-              Échelon & Gamification
-            </h2>
-          </div>
+        {/* LOT E.2 — Detailed muscle group stats */}
+        <div className="lg:col-span-12 mt-6 space-y-4">
+          <div className="flex flex-col lg:flex-row gap-4 items-start">
+            {/* Muscle group selector pills */}
+            <div className="lg:w-80 flex flex-wrap gap-2">
+              <span className="text-xs text-zinc-400 uppercase tracking-wider">Groupe musculaire</span>
+              {muscleGroupOptions.map((mg) => (
+                <button
+                  key={mg}
+                  type="button"
+                  onClick={() => setSelectedMuscleGroup(mg)}
+                  className={`inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition-all ${
+                    selectedMuscleGroup === mg
+                      ? 'bg-violet-600 text-white shadow'
+                      : 'text-zinc-400 hover:text-white border border-white/10'
+                  }`}
+                  aria-label={`Afficher les stats pour ${mg}`}
+                >
+                  {mg}
+                </button>
+              ))}
+            </div>
 
+            {/* Detailed stats card for selected group */}
+            <div className="lg:w-[] sport-card rounded-3xl p-6 min-w-0">
+              {selectedMuscleGroup ? (
+                <div className="space-y-4">
+                  <h3 className="font-display text-lg font-bold uppercase tracking-wider text-white">
+                    {selectedMuscleGroup}
+                  </h3>
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <div className="text-zinc-400 text-xs uppercase tracking-wider">Volume</div>
+                      <div className="font-display text-3xl font-bold text-white">{muscleGroupStats?.volume} kg</div>
+                    </div>
+                    <div>
+                      <div className="text-zinc-400 text-xs uppercase tracking-wider">Fréquence</div>
+                      <div className="font-display text-3xl font-bold text-white">{muscleGroupStats?.frequency} séances</div>
+                    </div>
+<div>
+                      <div className="text-zinc-400 text-xs uppercase tracking-wider">Tendance</div>
+                      <div className={`font-display text-3xl font-bold text-white ${muscleGroupStats?.trend === 'progressing' ? 'text-emerald-400' : muscleGroupStats?.trend === 'stagnating' ? 'text-violet-300' : muscleGroupStats?.trend === 'regressing' ? 'text-rose-300' : 'text-zinc-500'}`}>
+                        {muscleGroupStats?.trend === 'progressing'
+                          ? 'Progression'
+                          : muscleGroupStats?.trend === 'stagnating'
+                            ? 'Stagnation'
+                            : muscleGroupStats?.trend === 'regressing'
+                              ? 'Régression'
+                              : 'Données insuffisantes'}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-zinc-400 text-xs uppercase tracking-wider">Exercices</div>
+                      <div className="space-y-1 line-clamp-3">
+                        {muscleGroupStats &&
+                        muscleGroupStats.exerciseCount > 0 &&
+                        (
+                          getMuscleGroupExerciseNames(scopedSessions, selectedMuscleGroup, exercisesById).map((name, i) => (
+                            <span key={i} className="text-zinc-300 text-xs">
+                              • {name}
+                            </span>
+                          ))
+                        )}
+                        {muscleGroupStats?.exerciseCount === 0 && (
+                          <span className="text-zinc-500 text-xs">Aucun exercice</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <p className="text-zinc-500 text-xs uppercase tracking-wider">Sélectionnez un groupe musculaire ci-dessus pour afficher les statistiques détaillées.</p>
+                  <p className="text-zinc-400 text-xs mt-1">Choisissez parmi : {MuscleGroupList.map((g) => g).join(', ')}</p>
+                </div>
+              )}
+            </div>
+          </div>
+</div>
+
+        {/* LOT E.3 — RPE par série */}
+        <div className="lg:col-span-12 mt-6 space-y-4">
+          <div className="flex flex-col lg:flex-row gap-4 items-start">
+            {/* RPE summary card */}
+            <div className="lg:w-[] sport-card rounded-3xl p-6 min-w-0">
+              <h3 className="font-display text-lg font-bold uppercase tracking-wider text-white">
+                RPE perçue (RPE)
+              </h3>
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <div className="text-zinc-400 text-xs uppercase tracking-wider">Moyenne</div>
+                  <div className="font-display text-3xl font-bold text-white">
+                    {scopedSessions.length > 0
+                      ? computeAverageRPE(
+                        scopedSessions.flatMap((s) => s.exercises.map((log) => log.sets)).flat()
+                      )
+                    : ('—' / 10)}
+                </div>
+                <div>
+                  <div className="text-zinc-400 text-xs uppercase tracking-wider">Séries renseignées</div>
+                  <div className="font-display text-3xl font-bold text-white">
+                    {scopedSessions.length > 0
+                      ? computeRPEStats(
+                        scopedSessions.flatMap((s) => s.exercises.map((log) => log.sets)).flat()
+                      ).count
+                    : '0'}
+                </div>
+<div>
+                  <div className="text-zinc-400 text-xs uppercase tracking-wider">Minimum</div>
+                  <div className={`font-display text-3xl font-bold text-white ${computeRPEStats(scopedSessions.flatMap((s) => s.exercises.map((log) => log.sets)).flat()).min !== null ? 'text-emerald-400' : 'text-zinc-500'}`}>{computeRPEStats(scopedSessions.flatMap((s) => s.exercises.map((log) => log.sets)).flat()).min ?? '—'}</div>
+                </div>
+<div>
+                  <div className="text-zinc-400 text-xs uppercase tracking-wider">Maximum</div>
+                  <div className={`font-display text-3xl font-bold text-white ${computeRPEStats(scopedSessions.flatMap((s) => s.exercises.map((log) => log.sets)).flat()).max !== null ? 'text-emerald-400' : 'text-zinc-500'}`}>{computeRPEStats(scopedSessions.flatMap((s) => s.exercises.map((log) => log.sets)).flat()).max ?? '—'}</div>
+                </div>
+              </div>
+{scopedSessions.length > 0 &&
+              computeRPEStats(
+                scopedSessions.flatMap((s) => s.exercises.map((log) => log.sets)).flat()
+              ).count === 0 && (
+                <p className="text-zinc-500 text-xs mt-2">Aucun RPE renseigné</p>
+              )}
+            </div>
+          </div>
+        </div>
+        </div>
+
+{/* Level Progression & Gamification Ladder (5 Cols) */}
+        <div className="lg:col-span-5 sport-card rounded-3xl p-6 space-y-4">
           <div className="bg-white/5 border border-white/10 rounded-2xl p-5 text-center space-y-3">
             <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-600 to-indigo-600 flex items-center justify-center mx-auto shadow-lg shadow-violet-900/50">
               <Zap className="w-8 h-8 text-white fill-white" />
@@ -1125,7 +1279,7 @@ export const StatsPage: React.FC<StatsPageProps> = ({
             <div className="w-full bg-white/10 rounded-full h-2 overflow-hidden">
               <div
                 className="bg-violet-500 h-full rounded-full"
-                style={{ width: `${profile.nextLevelXp > 0 ? (profile.currentXp / profile.nextLevelXp) * 100 : 0}%` }}
+                style={{ width: profile.nextLevelXp > 0 ? (profile.currentXp / profile.nextLevelXp) * 100 + '%' : '0%' }}
               />
             </div>
             <div className="text-xs text-zinc-400 font-semibold">
@@ -1149,7 +1303,7 @@ export const StatsPage: React.FC<StatsPageProps> = ({
             {unlockedBadges.slice(-3).reverse().map((b) => (
               <div
                 key={b.id}
-                data-testid={`badge-${b.id}`}
+                data-testid={"badge-" + b.id}
                 className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-white/5 border border-white/10"
               >
                 <div className="flex items-center gap-2 min-w-0">
@@ -1157,7 +1311,7 @@ export const StatsPage: React.FC<StatsPageProps> = ({
                   <div className="min-w-0">
                     <div className="text-xs font-semibold text-zinc-100 truncate">{b.name}</div>
                     <div className="text-[10px] text-zinc-500 truncate">
-                      {b.unlockedAt ? `Débloqué le ${new Date(`${b.unlockedAt}T00:00:00`).toLocaleDateString('fr-FR')}` : 'Débloqué'}
+                      {b.unlockedAt ? 'Débloqué le ' + new Date(b.unlockedAt).toLocaleDateString('fr-FR') : 'Débloqué'}
                     </div>
                   </div>
                 </div>
@@ -1189,9 +1343,9 @@ export const StatsPage: React.FC<StatsPageProps> = ({
               </span>
             </div>
             {challengeProgress.map((c) => (
-              <div key={c.definition.id} data-testid={`challenge-${c.definition.id}`} className="space-y-1">
+              <div key={c.definition.id} data-testid={"challenge-" + c.definition.id} className="space-y-1">
                 <div className="flex items-center justify-between gap-2 text-xs">
-                  <span className={`font-semibold ${c.completed ? 'text-emerald-300' : 'text-zinc-300'}`}>
+                  <span className={"font-semibold " + (c.completed ? 'text-emerald-300' : 'text-zinc-300')}>
                     {c.completed && <CheckCircle2 className="w-3 h-3 inline mr-1 text-emerald-400" />}
                     {c.definition.name}
                   </span>
@@ -1202,8 +1356,8 @@ export const StatsPage: React.FC<StatsPageProps> = ({
                 </div>
                 <div className="w-full bg-white/10 rounded-full h-1.5 overflow-hidden">
                   <div
-                    className={`${c.completed ? 'bg-emerald-400' : 'bg-violet-400'} h-full rounded-full transition-all duration-500`}
-                    style={{ width: `${c.percent}%` }}
+                    className={"bg-emerald-400 " + (c.completed ? '' : 'bg-violet-400') + " h-full rounded-full transition-all duration-500"}
+                    style={{ width: c.percent + '%' }}
                   />
                 </div>
               </div>
@@ -1223,8 +1377,9 @@ export const StatsPage: React.FC<StatsPageProps> = ({
               <span>Série de 7 jours consécutifs</span>
               <span className="font-bold text-emerald-400">+500 XP</span>
             </div>
-          </div>
+</div>
         </div>
+      </div>
       </div>
 
       {/* LOT III: exercises classified by real trajectory */}
@@ -1279,21 +1434,21 @@ export const StatsPage: React.FC<StatsPageProps> = ({
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1" data-testid="stats-yearly-charts">
             <div data-testid="stats-yearly-sessions">
               <ProgressChart
-                points={yearlyTrend.map((m) => ({ date: `${m.key}-15`, value: m.sessions }))}
+                points={yearlyTrend.map((m) => ({ date: m.key + '-15', value: m.sessions }))}
                 metricLabel="Séances"
                 title="Séances / mois"
               />
             </div>
             <div data-testid="stats-yearly-duration">
               <ProgressChart
-                points={yearlyTrend.map((m) => ({ date: `${m.key}-15`, value: Math.round(m.durationMinutes) }))}
+                points={yearlyTrend.map((m) => ({ date: m.key + '-15', value: Math.round(m.durationMinutes) }))}
                 metricLabel="Durée"
                 title="Durée / mois"
               />
             </div>
             <div data-testid="stats-yearly-xp">
               <ProgressChart
-                points={yearlyTrend.map((m) => ({ date: `${m.key}-15`, value: m.xpEarned }))}
+                points={yearlyTrend.map((m) => ({ date: m.key + '-15', value: m.xpEarned }))}
                 metricLabel="XP"
                 title="XP / mois"
               />
@@ -1309,7 +1464,7 @@ export const StatsPage: React.FC<StatsPageProps> = ({
 };
 
 function formatMetric(value: number, unit: string): string {
-  return Number.isFinite(value) && Math.round(value) !== value ? `${value.toFixed(1)} ${unit}` : `${value} ${unit}`;
+  return Number.isFinite(value) && Math.round(value) !== value ? value.toFixed(1) + ' ' + unit : value + ' ' + unit;
 }
 
 function formatDate(date: string): string {
@@ -1328,12 +1483,12 @@ function formatMinutes(min: number): string {
   const rounded = Math.round(min);
   const h = Math.floor(rounded / 60);
   const m = rounded % 60;
-  return h > 0 ? (m > 0 ? `${h} h ${m}` : `${h} h`) : `${m} min`;
+  return h > 0 ? (m > 0 ? h + ' h ' + m : h + ' h') : m + ' min';
 }
 
 function formatVolume(kg: number): string {
   if (!Number.isFinite(kg) || kg <= 0) return '0';
-  return kg >= 1000 ? `${(kg / 1000).toFixed(1)}k` : `${Math.round(kg)}`;
+  return kg >= 1000 ? (kg / 1000).toFixed(1) + 'k' : String(Math.round(kg));
 }
 
 interface ComparisonCellProps {
@@ -1355,25 +1510,23 @@ function ComparisonCell({ label, current, previous, unit, format }: ComparisonCe
         {fmt(current)}
         {unit && <span className="text-xs text-zinc-400 font-normal"> {unit}</span>}
       </div>
-      <div className="text-[11px] text-zinc-500 flex items-center gap-1.5 flex-wrap">
-        <span>
-          {pct === null ? (
-            delta === null ? '—' : `précédente : ${fmt(previous)}`
-          ) : pct === 0 && delta === 0 ? (
-            `${fmt(previous)} · =`
-          ) : delta === null ? (
-            `${fmt(previous)}`
-          ) : (
-            `vs ${fmt(previous)}`
-          )}
+<div className="text-[11px] text-zinc-500 flex items-center gap-1.5 flex-wrap">
+<span>
+          {pct === null
+            ? (delta === null ? '—' : 'précédente : ' + fmt(previous))
+            : pct === 0 && delta === 0
+              ? fmt(previous) + ' · ='
+              : delta === null
+                ? fmt(previous)
+                : 'vs ' + fmt(previous)}
         </span>
         {delta !== null && delta !== 0 && (
-          <span className={`font-bold ${delta > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+          <span className={"font-bold " + (delta > 0 ? 'text-emerald-400' : 'text-rose-400')}>
             {delta > 0 ? '▲ +' : '▼ '}{formatSignedNumber(delta)}
           </span>
         )}
         {pct !== null && pct !== 0 && (
-          <span className={`font-bold ${pct > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+          <span className={"font-bold " + (pct > 0 ? 'text-emerald-400' : 'text-rose-400')}>
             ({pct > 0 ? '+' : ''}{pct}%)
           </span>
         )}
@@ -1399,8 +1552,8 @@ function TrendList({ title, tone, toneText, items }: TrendListProps) {
     tone === 'emerald' ? 'bg-emerald-400' : tone === 'amber' ? 'bg-amber-400' : 'bg-rose-400';
   return (
     <div className="p-4 rounded-2xl bg-white/5 border border-white/10 space-y-2.5">
-      <div className={`flex items-center gap-2 text-xs font-bold uppercase tracking-wider ${toneText}`}>
-        <span className={`w-1.5 h-1.5 rounded-full ${dot}`} />
+<div className={"flex items-center gap-2 text-xs font-bold uppercase tracking-wider " + toneText}>
+        <span className={"w-1.5 h-1.5 rounded-full " + dot}></span>
         {title}
       </div>
       {items.length === 0 ? (
@@ -1416,7 +1569,7 @@ function TrendList({ title, tone, toneText, items }: TrendListProps) {
             </div>
             <div className="text-[11px] text-zinc-500">
               {item.previous !== null
-                ? `${formatTrendDelta(item.current, item.previous)} vs ${item.previous} ${item.unit}`
+                ? formatTrendDelta(item.current, item.previous) + ' vs ' + item.previous + ' ' + item.unit
                 : 'dernière performance enregistrée'}
             </div>
           </div>
@@ -1428,7 +1581,7 @@ function TrendList({ title, tone, toneText, items }: TrendListProps) {
 
 function formatTrendDelta(current: number, previous: number): string {
   const delta = Math.round((current - previous) * 10) / 10;
-  return delta === 0 ? 'stable' : `${delta > 0 ? '+' : ''}${delta}`;
+  return delta === 0 ? 'stable' : (delta > 0 ? '+' : '') + delta;
 }
 
 function YearlyBars({ months }: { months: YearlyMonthTrend[] }) {
@@ -1442,7 +1595,7 @@ function YearlyBars({ months }: { months: YearlyMonthTrend[] }) {
             <span className="text-[10px] font-bold text-zinc-300 truncate max-w-full">{formatVolume(m.volumeKg)}</span>
             <div
               className="w-full rounded-t-lg bg-gradient-to-t from-violet-600 to-indigo-500"
-              style={{ height: `${height}px` }}
+              style={{ height: height + 'px' }}
             />
             <span className="text-[10px] text-zinc-500">{m.label}</span>
             <span className="text-[10px] text-zinc-500">{m.sessions} séc.</span>
@@ -1489,14 +1642,14 @@ function HistoryTable({
                     {Number.isInteger(perfValue) ? perfValue : perfValue.toFixed(1)} {metricUnit(metric)}
                   </span>
                   {delta && delta.delta !== null && Math.abs(delta.delta) > 1e-9 && (
-                    <span className={`ml-1.5 font-bold ${delta.delta > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    <span className={"ml-1.5 font-bold " + (delta.delta > 0 ? 'text-emerald-400' : 'text-rose-400')}>
                       {delta.delta > 0 ? '▲ +' : '▼ '}
                       {Math.round(delta.delta * 10) / 10}
                     </span>
                   )}
                 </td>
                 <td className="py-2 pr-3 whitespace-nowrap text-zinc-300">
-                  {entry.weightUsedKg > 0 ? `${entry.weightUsedKg} kg` : '—'}
+                  {entry.weightUsedKg > 0 ? entry.weightUsedKg + ' kg' : '—'}
                 </td>
                 <td className="py-2 pr-3 whitespace-nowrap text-zinc-400">
                   {entry.mode === 'timer' ? 'Timer' : 'Reps'}
@@ -1512,3 +1665,4 @@ function HistoryTable({
     </div>
   );
 }
+

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, Suspense } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef, Suspense } from 'react';
 import {
   NavPage,
   UserProfile,
@@ -13,6 +13,7 @@ import {
   MuscleGroup,
   ExercisePerformance,
   ExerciseBest,
+  ProgramExerciseConfig,
 } from './types';
 import { SportTrackStorage } from './db/indexedDb';
 import { getDefaultStretchesForDay } from './data/stretchesData';
@@ -51,6 +52,7 @@ import {
   type OnboardingMode,
 } from './utilsOnboarding';
 import type { QuickSessionMinutes } from './utilsQuickSession';
+import type { LibraryFilterType } from './pages/ExercisesPage';
 
 // Pages — LOT 8 (S1 — performance): HomePage stays in the initial chunk (it is
 // the landing page); every other page is lazy-loaded into its own chunk and only
@@ -70,7 +72,7 @@ const SocialPage = React.lazy(() => import('./pages/SocialPage').then((m) => ({ 
 const SettingsPage = React.lazy(() => import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })));
 
 import { initialProfile } from './data/initialData';
-import { Dumbbell, CheckCircle2, Trophy, X, AlertTriangle } from 'lucide-react';
+import { Trophy, X, AlertTriangle } from 'lucide-react';
 import {
   getWorkoutSettings,
   resolveThemeMode,
@@ -107,6 +109,9 @@ function applyAppearanceSettings(settings: { themeMode: ThemeModeValue; accentCo
 
 export default function App() {
   const [currentPage, setCurrentPage] = useState<NavPage>('accueil');
+  // Bibliothèque UNIFIÉE : filtre de type de la page Exercices, piloté par le
+  // hash (#etirements → Exercices / filtre Étirements), sans route séparée.
+  const [libraryFilter, setLibraryFilter] = useState<LibraryFilterType>('all');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   // LOT 9 — 9.1: onboarding done flag (localStorage only; modal shows at first
@@ -184,6 +189,15 @@ export default function App() {
 
   const handleWorkoutActivityChange = useCallback((active: boolean) => {
     workoutActiveRef.current = active;
+  }, []);
+
+  // LOT 13 — stable layout callbacks so Header / Navigation can memoize.
+  const openMobileMenu = useCallback(() => setMobileMenuOpen(true), []);
+  const closeMobileMenu = useCallback(() => setMobileMenuOpen(false), []);
+  const applyNavigate = useCallback((page: NavPage) => {
+    setCurrentPage(page);
+    window.location.hash = page;
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   }, []);
 
   // Victory celebration modal
@@ -341,6 +355,20 @@ export default function App() {
         'profil',
         'parametres',
       ];
+      // Bibliothèque UNIFIÉE — les étirements vivent dans la bibliothèque d'exercices.
+      // L'ancien hash #etirements ne déclenche plus une page séparée ; il ouvre la
+      // page Exercices avec le filtre de type "Étirements" (les liens, raccourcis
+      // et favoris existants restent valides).
+      if (hash === 'etirements') {
+        setCurrentPage('exercices');
+        setLibraryFilter('stretch');
+        return;
+      }
+      if (hash === 'exercices') {
+        setCurrentPage('exercices');
+        setLibraryFilter('all');
+        return;
+      }
       if (validPages.includes(hash as NavPage)) {
         setCurrentPage(hash as NavPage);
       }
@@ -351,16 +379,10 @@ export default function App() {
     return () => window.removeEventListener('hashchange', handleHash);
   }, []);
 
-  const applyNavigate = (page: NavPage) => {
-    setCurrentPage(page);
-    window.location.hash = page;
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
   // F5 — intercept in-app navigation while a session is in progress. Finish and
   // cancel paths reset workoutActiveRef before navigating, so they never show
   // the confirmation again (no double confirmation, no navigation loops).
-  const handleNavigate = (page: NavPage) => {
+  const handleNavigate = useCallback((page: NavPage) => {
     if (page === 'seance' || page === currentPage) {
       applyNavigate(page);
       return;
@@ -371,7 +393,7 @@ export default function App() {
       return;
     }
     applyNavigate(page);
-  };
+  }, [currentPage, applyNavigate]);
 
   const confirmLeaveSession = (page: NavPage) => {
     workoutActiveRef.current = false;
@@ -519,8 +541,10 @@ export default function App() {
     await SportTrackStorage.putItem('sessions', session);
     await SportTrackStorage.saveProfile(updatedProfile);
 
-    for (const rec of newRecordsToSave) {
-      await SportTrackStorage.putItem('records', rec);
+    // LOT 13: batching — all new records persist inside one single transaction
+    // (same stores/keys as before, fully atomic) instead of N sequential writes.
+    if (newRecordsToSave.length > 0) {
+      await SportTrackStorage.putMany('records', newRecordsToSave);
     }
 
     // 3b. Per-exercise progression: build performances from recorded sets, merge,
@@ -616,9 +640,8 @@ export default function App() {
       isActive: p.id === programId,
     }));
     setPrograms(updated);
-    for (const p of updated) {
-      await SportTrackStorage.putItem('programs', p);
-    }
+    // LOT 13: single batched transaction instead of N sequential writes.
+    await SportTrackStorage.putMany('programs', updated);
   };
 
   const handleSaveProgram = async (program: WorkoutProgram) => {
@@ -666,6 +689,12 @@ export default function App() {
   };
 
   const handleDeleteProgram = async (programId: string) => {
+    // LOT D — Protection des programmes système (ex: MY_PROGRAM v2)
+    const programToDelete = programs.find((p) => p.id === programId);
+    if (programToDelete?.isSystem) {
+      console.warn('Tentative de suppression d\'un programme système bloquée:', programId);
+      return; // Bloqué silencieusement - l'UI doit prévenir avant
+    }
     await SportTrackStorage.deleteItem('programs', programId);
     setPrograms((prev) => {
       const remaining = prev.filter((p) => p.id !== programId);
@@ -695,9 +724,7 @@ export default function App() {
       const nextPrograms = renameExerciseInPrograms(programs, exercise.id, exercise.name);
       if (nextPrograms !== programs) {
         setPrograms(nextPrograms);
-        for (const p of nextPrograms) {
-          await SportTrackStorage.putItem('programs', p);
-        }
+        await SportTrackStorage.putMany('programs', nextPrograms);
       }
     }
   };
@@ -713,13 +740,11 @@ export default function App() {
     const { programs: nextPrograms, removedReferences } = removeExerciseFromPrograms(programs, exerciseId);
     if (removedReferences > 0) {
       setPrograms(nextPrograms);
-      for (const p of nextPrograms) {
-        await SportTrackStorage.putItem('programs', p);
-      }
+      await SportTrackStorage.putMany('programs', nextPrograms);
     }
   };
 
-  const handleToggleFavorite = async (exerciseId: string) => {
+  const handleToggleFavorite = useCallback(async (exerciseId: string) => {
     const target = exercises.find((e) => e.id === exerciseId);
     if (!target) return;
     const updated: Exercise = {
@@ -728,6 +753,47 @@ export default function App() {
     };
     await SportTrackStorage.putItem('exercises', updated);
     setExercises((prev) => prev.map((e) => (e.id === exerciseId ? updated : e)));
+  }, [exercises]);
+
+  // Add exercise to program (from library)
+  const handleAddExerciseToProgram = async (exercise: Exercise, programId: string, dayId: string) => {
+    const program = programs.find((p) => p.id === programId);
+    if (!program) return;
+    const day = program.days.find((d) => d.id === dayId);
+    if (!day) return;
+
+    const setsCount = Number(exercise.defaultSets) || 4;
+    const repsN = Number(exercise.defaultReps) || 10;
+    const newConfig: ProgramExerciseConfig = {
+      id: `cfg-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+      exerciseId: exercise.id,
+      exerciseName: exercise.name,
+      sets: setsCount,
+      reps: repsN,
+      repsPlan: Array.from({ length: setsCount }, () => repsN),
+      durationPlan: Array.from({ length: setsCount }, () => 0),
+      mode: 'reps',
+      durationSec: 0,
+      targetWeightKg: 0,
+      restSec: exercise.defaultRestSec || 90,
+      notes: '',
+    };
+
+    const updatedExercises = day.exercises ? [...day.exercises, newConfig] : [newConfig];
+    const updatedDay: WorkoutProgramDay = {
+      ...day,
+      exercises: updatedExercises,
+      exerciseIds: updatedExercises.map((e) => e.exerciseId),
+    };
+
+    const updatedDays = program.days.map((d) => (d.id === dayId ? updatedDay : d));
+    const updatedProgram: WorkoutProgram = {
+      ...program,
+      days: updatedDays,
+    };
+
+    await SportTrackStorage.putItem('programs', updatedProgram);
+    setPrograms((prev) => prev.map((p) => (p.id === programId ? updatedProgram : p)));
   };
 
   // Goals Management
@@ -777,6 +843,19 @@ export default function App() {
     setOnboardingDone(true);
   }, []);
 
+  // LOT 5 — Item 15: map exercise -> number of program DAYS referencing it.
+  // Shown in the ExercisesPage deletion confirmation so the user knows exactly
+  // what will be impacted before confirming. LOT 13: memoized — recomputed only
+  // when the exercise or program collections actually change (not on every
+  // App re-render caused by a streak, toast or menu toggle).
+  const programUsage: Record<string, number> = useMemo(() => {
+    const usage: Record<string, number> = {};
+    for (const ex of exercises) {
+      usage[ex.id] = countExerciseProgramUsages(programs, ex.id).dayCount;
+    }
+    return usage;
+  }, [exercises, programs]);
+
   if (isLoading) {
     return (
       <div className="min-h-screen bg-[#050505] flex items-center justify-center text-white relative overflow-hidden">
@@ -793,20 +872,18 @@ export default function App() {
     );
   }
 
-  // LOT 5 — Item 15: map exercise -> number of program DAYS referencing it.
-  // Shown in the ExercisesPage deletion confirmation so the user knows exactly
-  // what will be impacted before confirming.
-  const programUsage: Record<string, number> = {};
-  for (const ex of exercises) {
-    programUsage[ex.id] = countExerciseProgramUsages(programs, ex.id).dayCount;
-  }
-
   return (
     <div className="min-h-screen bg-[#050505] text-white flex flex-col font-sans relative overflow-x-hidden">
-      {/* Ambient background blurred glow orbs for authentic Frosted Glass refraction */}
-      <div className="fixed top-[-10%] left-[-10%] w-[45vw] h-[45vw] max-w-[600px] max-h-[600px] bg-violet-900/20 blur-[130px] rounded-full pointer-events-none -z-0" />
-      <div className="fixed bottom-[-10%] right-[-10%] w-[55vw] h-[55vw] max-w-[700px] max-h-[700px] bg-violet-600/10 blur-[160px] rounded-full pointer-events-none -z-0" />
-      <div className="fixed top-[35%] right-[5%] w-[35vw] h-[35vw] max-w-[450px] max-h-[450px] bg-indigo-600/10 blur-[140px] rounded-full pointer-events-none -z-0" />
+      {/* Ambient background blurred glow orbs for authentic Frosted Glass refraction.
+          LOT 13: radii reduced (130/160/140px → 70/95/70px) — gaussian-blur cost is
+          proportional to the filtered area, and per-frame composited filters on large
+          fixed layers are the #1 mobile-UI cost. The :content tint stays violet/indigo
+          so the visual identity is unchanged; the orbs are promoted to a dedicated
+          compositing layer (.ambient-orb) so their bitmap is cached and not re-blurred
+          on every scroll/repaint, and they are hidden entirely for reduced-motion. */}
+      <div className="ambient-orb fixed top-[-10%] left-[-10%] w-[45vw] h-[45vw] max-w-[600px] max-h-[600px] bg-violet-900/20 blur-[70px] rounded-full pointer-events-none -z-0" />
+      <div className="ambient-orb fixed bottom-[-10%] right-[-10%] w-[55vw] h-[55vw] max-w-[700px] max-h-[700px] bg-violet-600/10 blur-[95px] rounded-full pointer-events-none -z-0" />
+      <div className="ambient-orb fixed top-[35%] right-[5%] w-[35vw] h-[35vw] max-w-[450px] max-h-[450px] bg-indigo-600/10 blur-[70px] rounded-full pointer-events-none -z-0" />
 
       {/* PWA Install Banner */}
       <PwaInstallBanner />
@@ -824,7 +901,7 @@ export default function App() {
         profile={profile}
         currentPage={currentPage}
         onNavigate={handleNavigate}
-        onOpenMobileMenu={() => setMobileMenuOpen(true)}
+        onOpenMobileMenu={openMobileMenu}
       />
 
       {/* Main Layout Container */}
@@ -834,7 +911,8 @@ export default function App() {
           currentPage={currentPage}
           onNavigate={handleNavigate}
           mobileMenuOpen={mobileMenuOpen}
-          onCloseMobileMenu={() => setMobileMenuOpen(false)}
+          onCloseMobileMenu={closeMobileMenu}
+          onOpenMobileMenu={openMobileMenu}
         />
 
         {/* Page Content View Area */}
@@ -987,11 +1065,14 @@ export default function App() {
                 exercises={exercises}
                 exercisePerformances={exercisePerformances}
                 exerciseBests={exerciseBests}
+                programs={programs}
                 programUsage={programUsage}
                 onAddExercise={handleAddExercise}
                 onUpdateExercise={handleUpdateExercise}
                 onDeleteExercise={handleDeleteExercise}
                 onToggleFavorite={handleToggleFavorite}
+                onAddExerciseToProgram={handleAddExerciseToProgram}
+                initialFilter={libraryFilter}
               />
             )}
 
@@ -1029,7 +1110,7 @@ export default function App() {
             {currentPage === 'calendrier' && (
               <CalendarPage
                 sessions={sessions}
-                activeProgram={programs.find((p) => p.isActive) || programs[0]}
+                activeProgram={activeProgram}
                 records={records}
                 onStartSession={handleStartSession}
                 onStartSessionWithDay={handleStartSessionWithDay}
@@ -1073,7 +1154,7 @@ export default function App() {
                 onAddRecord={handleAddRecord}
                 exercisePerformances={exercisePerformances}
                 exerciseBests={exerciseBests}
-                activeProgram={programs.find((p) => p.isActive) || programs[0]}
+                activeProgram={activeProgram}
                 onSaveProgram={handleSaveProgram}
               />
             )}

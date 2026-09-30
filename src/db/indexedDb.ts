@@ -17,6 +17,7 @@ import {
   initialExercises,
 } from '../data/initialData';
 import { MY_PROGRAM } from '../data/myProgram';
+import { DEFAULT_PROGRAM_V1 } from '../data/defaultProgramV1';
 import { serializeBackup, parseBackup, BackupError, SETTINGS_KEY } from './backup';
 import { getWorkoutSettings, normaliseWorkoutSettings } from '../utilsSettings';
 
@@ -29,6 +30,19 @@ const DB_VERSION = 8; // v8: sessionDrafts store (additive)
 // default content. Returns true when the default must be seeded.
 export function shouldSeedDefaultProgram(existingPrograms: readonly { id: string }[]): boolean {
   return !existingPrograms.some((p) => !!p && p.id === MY_PROGRAM.id);
+}
+
+// Application-level upgrade of the OFFICIAL default program (V8 kept — no new
+// migration). The stored program at the official id may be replaced in place
+// ONLY when it is byte-identical to DEFAULT_PROGRAM_V1 (the previous official
+// default, captured before the content was updated). Any difference (edits,
+// additions, reordering) means the user touched it and the program is preserved.
+// Returns true when the pristine previous default may be upgraded to MY_PROGRAM.
+export function shouldUpgradeStoredDefaultProgram(
+  storedProgram: Pick<WorkoutProgram, 'id'> | null | undefined,
+): boolean {
+  if (!storedProgram || storedProgram.id !== MY_PROGRAM.id) return false;
+  return JSON.stringify(storedProgram) === JSON.stringify(DEFAULT_PROGRAM_V1);
 }
 
 export class SportTrackStorage {
@@ -150,6 +164,14 @@ export class SportTrackStorage {
           const existingProgs = (getAllProg.result || []) as WorkoutProgram[];
           if (shouldSeedDefaultProgram(existingProgs)) {
             progStore.put(MY_PROGRAM);
+          } else {
+            // The official preloaded program exists. Upgrade it to the new
+            // default content ONLY if it is byte-identical to the PREVIOUS
+            // official default (i.e. the user never modified it).
+            const storedDefault = existingProgs.find((p) => p.id === MY_PROGRAM.id);
+            if (shouldUpgradeStoredDefaultProgram(storedDefault)) {
+              progStore.put(MY_PROGRAM);
+            }
           }
         };
 
@@ -256,6 +278,22 @@ export class SportTrackStorage {
       const req = tx.objectStore(storeName).put(item);
       req.onsuccess = () => resolve();
       req.onerror = () => reject(req.error);
+    });
+  }
+
+  // LOT 13 — batched write: a single readwrite transaction for all items
+  // instead of N sequential transactions (records batch, multi-program writes).
+  // Atomic: all or nothing; existing behaviour is preserved (same stores, keys).
+  public static async putMany<T>(storeName: string, items: T[]): Promise<void> {
+    if (items.length === 0) return;
+    const db = await this.getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, 'readwrite');
+      const store = tx.objectStore(storeName);
+      for (const item of items) store.put(item);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error || new Error(`Saving ${storeName} failed`));
+      tx.onabort = () => reject(tx.error || new Error(`Saving ${storeName} aborted`));
     });
   }
 

@@ -21,15 +21,19 @@ export type AccentColorValue = (typeof ACCENT_COLORS)[number];
 
 // LOT 6 — item 18 (customisable dashboard): the ordered, user-visible blocks.
 // The hero START action is ALWAYS displayed above them and is never here.
+// LOT 11 — intuitive UX: the DEFAULT reading order now puts the action first
+// (next session/recommendation), then the work-out picture (weekly/stats) and
+// finally the gamified bonus (streak/level/volume/badges/records). This only
+// changes the DEFAULT: users who saved a custom dashboard order keep it.
 export const DASHBOARD_BLOCK_KEYS = [
+  'next-session',
+  'recommendation',
+  'weekly',
+  'stats',
   'streak',
   'level',
   'volume',
-  'weekly',
   'badges',
-  'stats',
-  'recommendation',
-  'next-session',
   'records',
 ] as const;
 export type DashboardBlockKey = (typeof DASHBOARD_BLOCK_KEYS)[number];
@@ -386,6 +390,16 @@ export function resetWorkoutSettings(adapter: SettingsAdapter = getSettingsStora
 
 // Convenience single-call used by the guided engine & any consumer that just
 // needs the effective settings. Named to match the expected read-layer API.
+// LOT 13 — cached layer: parses localStorage only once per actual change,
+// avoiding ~20-60 redundant JSON.parse calls per render in the workout page.
+let _cachedRaw: string | null = null;
+let _cachedSettings: WorkoutSettings | null = null;
+
 export function getWorkoutSettings(adapter: SettingsAdapter = getSettingsStorage()): WorkoutSettings {
-  return loadWorkoutSettings(adapter);
+  const stored = adapter.getItem(SETTINGS_STORAGE_KEY) ?? '';
+  if (stored === _cachedRaw && _cachedSettings) return _cachedSettings;
+  const parsed = loadWorkoutSettings(adapter);
+  _cachedRaw = stored;
+  _cachedSettings = parsed;
+  return parsed;
 }

@@ -172,6 +172,28 @@ export function resolveTransitionRestSec(
 //    fallback) via resolveSetRestSec;
 //  - anything else falls back to the caller-provided session/default rest.
 // Pure and side-effect free so the guided session and the unit tests share it.
+export function resolveStretchRestSec(globalTransitionRestSec?: number): number {
+  // The rest BETWEEN two CONSECUTIVE stretches of the guided flow. Every
+  // finished stretch (a side counts as a stretch step) is followed by a rest
+  // before the next one, whatever the exerciseId / name of the upcoming stretch
+  // (two sides of the same item and repeated occurrences each get their own
+  // rest). Stretches have no per-item rest config, so the rest is resolved from
+  // the SAME existing SportTrack parameter as the rest between exercises (the
+  // global exerciseTransitionRestSec), defaulting to 30 seconds. A "no rest"
+  // value follows the exact same semantics as exercise transitions.
+  return resolveTransitionRestSec(undefined, globalTransitionRestSec);
+}
+
+// Pure, exact rest-time adjustment used by the guided "+15s" / "-15s" buttons.
+// Kept framework-free (and free of any React state updater) so a click always
+// applies exactly `delta` seconds — never double-applied by a dev-mode
+// StrictMode double-invocation of a setState updater. Clamped at 0 (never
+// negative; reaching 0 just lets the rest finish on its next tick).
+export function adjustRestSeconds(current: number, delta: number): number {
+  const base = Math.round(Number(current) || 0);
+  return Math.max(0, base + delta);
+}
+
 export function resolveGuidedRestSec(opts: {
   upcomingStep?: GuidedStep;
   exercises: SessionExerciseLog[];
@@ -220,9 +242,18 @@ export function estimatedGuidedDurationSec(
       });
     }
   });
-  buildStretchSteps(stretches).forEach((s) => {
+  const stretchSteps = buildStretchSteps(stretches);
+  stretchSteps.forEach((s, i) => {
     const st = stretches[s.stretchIndex];
     if (st) total += st.durationSec;
+    const next = stretchSteps[i + 1];
+    // Rest between EVERY pair of consecutive stretch steps (sides of the same
+    // stretch and repeated occurrences included), exactly like the runtime
+    // flow: none before the first stretch (it follows the last exercise) and
+    // none after the last one.
+    if (next) {
+      total += resolveStretchRestSec(exerciseTransitionRestSec);
+    }
   });
   return Math.max(0, Math.round(total));
 }

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { WorkoutSession, WorkoutProgram, WorkoutProgramDay, PersonalRecord } from '../types';
 import {
   Calendar as CalendarIcon,
@@ -72,11 +72,16 @@ export const CalendarPage: React.FC<CalendarPageProps> = ({
   const blanksArray = Array.from({ length: startDay }, (_, i) => i);
 
   // Sessions map by YYYY-MM-DD
-  const sessionsByDate: Record<string, WorkoutSession[]> = {};
-  sessions.forEach((s) => {
-    if (!sessionsByDate[s.date]) sessionsByDate[s.date] = [];
-    sessionsByDate[s.date].push(s);
-  });
+  // LOT 13: memoized so month navigation / modal state changes don't rebuild
+  // the O(n) grouping on every render.
+  const sessionsByDate = useMemo(() => {
+    const map: Record<string, WorkoutSession[]> = {};
+    sessions.forEach((s) => {
+      if (!map[s.date]) map[s.date] = [];
+      map[s.date].push(s);
+    });
+    return map;
+  }, [sessions]);
 
   const selectedSessions = sessionsByDate[selectedDateStr] || [];
 
@@ -91,11 +96,25 @@ export const CalendarPage: React.FC<CalendarPageProps> = ({
   const completedDateKeys = Object.keys(sessionsByDate);
   const hasProgramDays = !!(activeProgram?.days?.length);
 
+  // LOT 13: Set of planned day-of-week names, computed once per change instead
+  // of scanning activeProgram.days for every calendar cell on every render.
+  const plannedDayNames = useMemo(
+    () => new Set((activeProgram?.days ?? []).map((d) => d.dayOfWeek)),
+    [activeProgram]
+  );
+
   // LOT III: monthly summary for the displayed month (pure helper, real data).
-  const monthSummary = computeMonthSummary(year, month, sessions, activeProgram);
+  const monthSummary = useMemo(
+    () => computeMonthSummary(year, month, sessions, activeProgram),
+    [year, month, sessions, activeProgram]
+  );
 
   // LOT III: personal records achieved on the selected date.
-  const dayRecords = (records || []).filter((r) => r.date === selectedDateStr);
+  // LOT 13: memoized (records array + selected date are the only inputs).
+  const dayRecords = useMemo(
+    () => (records || []).filter((r) => r.date === selectedDateStr),
+    [records, selectedDateStr]
+  );
   const hasDayRecords = dayRecords.length > 0;
 
   return (
@@ -180,7 +199,7 @@ export const CalendarPage: React.FC<CalendarPageProps> = ({
               const isToday = toLocalDateKey(new Date()) === currentIsoDate;
 
               const cellDayName = dayOfWeekName(currentIsoDate);
-              const hasPlanned = Boolean(activeProgram?.days.some((d) => d.dayOfWeek === cellDayName));
+              const hasPlanned = plannedDayNames.has(cellDayName);
 
               return (
                 <button
@@ -238,6 +257,14 @@ export const CalendarPage: React.FC<CalendarPageProps> = ({
             <div className="flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-violet-400/60" />
               <span>Séance programmée (planifiée)</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-violet-600 border border-violet-300" />
+              <span>Aujourd'hui</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-[4px] bg-violet-950/80 border border-violet-400" />
+              <span>Jour sélectionné</span>
             </div>
             {hasProgramDays && (
               <div className="flex items-center gap-1.5">

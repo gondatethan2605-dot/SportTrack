@@ -1,4 +1,4 @@
-import { WorkoutProgram, WorkoutProgramDay, ProgramExerciseConfig } from './types';
+import { WorkoutProgram, WorkoutProgramDay, ProgramExerciseConfig, ExerciseMode } from './types';
 
 // ----------------------------------------------------------------------------
 // LOT 9 — Item 9.7 : détection d'incohérences de programme.
@@ -7,6 +7,9 @@ import { WorkoutProgram, WorkoutProgramDay, ProgramExerciseConfig } from './type
 // mutates anything and never persists anything. The exercise catalog is
 // optional: when absent, reference checks are skipped (the UI still validates
 // structural issues).
+//
+// LOT D — Validation renforcée : blocages pour NaN/Infinity, mode invalide,
+// repsPlan/durationPlan/restPlan incompatibles, séries à 0, repos invalide.
 // ----------------------------------------------------------------------------
 
 export type ConsistencyLevel = 'error' | 'warning';
@@ -46,6 +49,55 @@ function dayHasAnyExercise(day: WorkoutProgramDay): boolean {
     (day?.exercises && day.exercises.length > 0) ||
     (day?.exerciseIds && day.exerciseIds.length > 0)
   );
+}
+
+function isFiniteNumber(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v);
+}
+
+function isNonNegativeFiniteNumber(v: unknown): v is number {
+  return isFiniteNumber(v) && v >= 0;
+}
+
+function isPositiveFiniteNumber(v: unknown): v is number {
+  return isFiniteNumber(v) && v > 0;
+}
+
+function isValidExerciseMode(v: unknown): v is ExerciseMode {
+  return v === 'reps' || v === 'timer';
+}
+
+function validateRepsPlan(plan: unknown, sets: number): string | null {
+  if (!Array.isArray(plan)) return null;
+  if (plan.length === 0) return null;
+  if (plan.length !== sets) return 'plan-length-mismatch';
+  for (const v of plan) {
+    if (typeof v !== 'number' && typeof v !== 'string') return 'plan-invalid-type';
+    const n = typeof v === 'string' ? Number(v) : v;
+    if (!isNonNegativeFiniteNumber(n)) return 'plan-nan-infinity';
+  }
+  return null;
+}
+
+function validateDurationPlan(plan: unknown, sets: number): string | null {
+  if (!Array.isArray(plan)) return null;
+  if (plan.length === 0) return null;
+  if (plan.length !== sets) return 'plan-length-mismatch';
+  for (const v of plan) {
+    if (!isNonNegativeFiniteNumber(v)) return 'plan-nan-infinity';
+  }
+  return null;
+}
+
+function validateRestPlan(plan: unknown, sets: number): string | null {
+  if (!Array.isArray(plan)) return null;
+  if (plan.length === 0) return null;
+  // restPlan a (sets - 1) entrées pour le repos ENTRE les séries
+  if (plan.length !== Math.max(0, sets - 1)) return 'plan-length-mismatch';
+  for (const v of plan) {
+    if (!isNonNegativeFiniteNumber(v)) return 'plan-nan-infinity';
+  }
+  return null;
 }
 
 // Fully validated consistency of one program, optionally against the exercise
@@ -130,7 +182,7 @@ export function validateProgramConsistency(
     // WARNING — very heavy planned volume (many sets in one session): the day
     // stays executable but deserves a heads-up.
     const totalSets = configs.reduce(
-      (acc, c) => acc + (c && Number.isFinite(Number(c.sets)) ? Number(c.sets) : 0),
+      (acc, c) => acc + (c && isPositiveFiniteNumber(c.sets) ? Number(c.sets) : 0),
       0
     );
     if (totalSets >= 30) {
@@ -157,11 +209,11 @@ export function validateProgramConsistency(
         });
       }
 
-      // WARNING — non-positive series count.
-      if (!Number.isFinite(Number(cfg.sets)) || Number(cfg.sets) <= 0) {
-        warnings.push({
+      // ERROR — non-positive or invalid series count (BLOCAGE).
+      if (!isPositiveFiniteNumber(cfg.sets)) {
+        errors.push({
           code: 'invalid-sets',
-          level: 'warning',
+          level: 'error',
           ...dayCtx,
           exerciseId: cfg.exerciseId,
           exerciseName: cfg.exerciseName,
@@ -169,41 +221,108 @@ export function validateProgramConsistency(
         });
       }
 
-      // WARNING — invalid rest.
-      if (!Number.isFinite(Number(cfg.restSec)) || cfg.restSec == null || cfg.restSec < 0) {
-        warnings.push({
+      // ERROR — invalid rest (NaN, Infinity, negative) — BLOCAGE.
+      if (!isNonNegativeFiniteNumber(cfg.restSec)) {
+        errors.push({
           code: 'invalid-rest',
-          level: 'warning',
+          level: 'error',
           ...dayCtx,
           exerciseId: cfg.exerciseId,
           exerciseName: cfg.exerciseName,
-          message: `L'exercice « ${cfg.exerciseName || cfg.exerciseId} » a un repos entre séries invalide.`,
+          message: `L'exercice « ${cfg.exerciseName || cfg.exerciseId} » a un repos entre séries invalide (${cfg.restSec}).`,
         });
       }
 
-      // WARNING — timer mode without a duration is not executable as timed.
-      if (cfg.mode === 'timer' && (!Number.isFinite(Number(cfg.durationSec)) || Number(cfg.durationSec) <= 0)) {
-        warnings.push({
+      // ERROR — invalid transitionRestSec
+      if (cfg.transitionRestSec != null && !isNonNegativeFiniteNumber(cfg.transitionRestSec)) {
+        errors.push({
+          code: 'invalid-transition-rest',
+          level: 'error',
+          ...dayCtx,
+          exerciseId: cfg.exerciseId,
+          exerciseName: cfg.exerciseName,
+          message: `L'exercice « ${cfg.exerciseName || cfg.exerciseId} » a un repos de transition invalide (${cfg.transitionRestSec}).`,
+        });
+      }
+
+      // ERROR — invalid mode (must be 'reps' or 'timer')
+      if (!isValidExerciseMode(cfg.mode)) {
+        errors.push({
+          code: 'invalid-mode',
+          level: 'error',
+          ...dayCtx,
+          exerciseId: cfg.exerciseId,
+          exerciseName: cfg.exerciseName,
+          message: `L'exercice « ${cfg.exerciseName || cfg.exerciseId} » a un mode invalide (« ${cfg.mode} »). Doit être 'reps' ou 'timer'.`,
+        });
+      }
+
+      // ERROR — timer mode without a valid duration is not executable as timed.
+      if (cfg.mode === 'timer' && !isPositiveFiniteNumber(cfg.durationSec)) {
+        errors.push({
           code: 'timer-without-duration',
-          level: 'warning',
+          level: 'error',
           ...dayCtx,
           exerciseId: cfg.exerciseId,
           exerciseName: cfg.exerciseName,
-          message: `L'exercice « ${cfg.exerciseName || cfg.exerciseId} » est en mode chrono mais n'a aucune durée.`,
+          message: `L'exercice « ${cfg.exerciseName || cfg.exerciseId} » est en mode chrono mais n'a aucune durée valide.`,
         });
       }
 
-      // WARNING — per-series plan length mismatch with the series count.
-      const planMismatch = (plan: (number | string)[] | undefined) =>
-        Array.isArray(plan) && plan.length > 0 && plan.length !== Number(cfg.sets);
-      if (planMismatch(cfg.repsPlan) || planMismatch(cfg.durationPlan) || planMismatch(cfg.restPlan)) {
-        warnings.push({
-          code: 'plan-length-mismatch',
-          level: 'warning',
+      // ERROR — NaN or Infinity in targetWeightKg
+      if (!isFiniteNumber(cfg.targetWeightKg)) {
+        errors.push({
+          code: 'invalid-weight',
+          level: 'error',
           ...dayCtx,
           exerciseId: cfg.exerciseId,
           exerciseName: cfg.exerciseName,
-          message: `L'exercice « ${cfg.exerciseName || cfg.exerciseId} » a un plan par série dont la longueur ne correspond pas au nombre de séries.`,
+          message: `L'exercice « ${cfg.exerciseName || cfg.exerciseId} » a un poids cible invalide (${cfg.targetWeightKg}).`,
+        });
+      }
+
+      // ERROR — repsPlan: NaN/Infinity or length mismatch
+      const repsPlanErr = validateRepsPlan(cfg.repsPlan, Number(cfg.sets));
+      if (repsPlanErr) {
+        errors.push({
+          code: repsPlanErr === 'plan-length-mismatch' ? 'plan-length-mismatch' : 'plan-nan-infinity',
+          level: 'error',
+          ...dayCtx,
+          exerciseId: cfg.exerciseId,
+          exerciseName: cfg.exerciseName,
+          message: repsPlanErr === 'plan-length-mismatch'
+            ? `L'exercice « ${cfg.exerciseName || cfg.exerciseId} » a un plan de répétitions par série dont la longueur (${cfg.repsPlan?.length ?? 0}) ne correspond pas au nombre de séries (${cfg.sets}).`
+            : `L'exercice « ${cfg.exerciseName || cfg.exerciseId} » a un plan de répétitions contenant des valeurs invalides (NaN/Infinity).`,
+        });
+      }
+
+      // ERROR — durationPlan: NaN/Infinity or length mismatch
+      const durPlanErr = validateDurationPlan(cfg.durationPlan, Number(cfg.sets));
+      if (durPlanErr) {
+        errors.push({
+          code: durPlanErr === 'plan-length-mismatch' ? 'plan-length-mismatch' : 'plan-nan-infinity',
+          level: 'error',
+          ...dayCtx,
+          exerciseId: cfg.exerciseId,
+          exerciseName: cfg.exerciseName,
+          message: durPlanErr === 'plan-length-mismatch'
+            ? `L'exercice « ${cfg.exerciseName || cfg.exerciseId} » a un plan de durée par série dont la longueur (${cfg.durationPlan?.length ?? 0}) ne correspond pas au nombre de séries (${cfg.sets}).`
+            : `L'exercice « ${cfg.exerciseName || cfg.exerciseId} » a un plan de durée contenant des valeurs invalides (NaN/Infinity).`,
+        });
+      }
+
+      // ERROR — restPlan: NaN/Infinity or length mismatch
+      const restPlanErr = validateRestPlan(cfg.restPlan, Number(cfg.sets));
+      if (restPlanErr) {
+        errors.push({
+          code: restPlanErr === 'plan-length-mismatch' ? 'plan-length-mismatch' : 'plan-nan-infinity',
+          level: 'error',
+          ...dayCtx,
+          exerciseId: cfg.exerciseId,
+          exerciseName: cfg.exerciseName,
+          message: restPlanErr === 'plan-length-mismatch'
+            ? `L'exercice « ${cfg.exerciseName || cfg.exerciseId} » a un plan de repos par série dont la longueur (${cfg.restPlan?.length ?? 0}) ne correspond pas au nombre de séries (${cfg.sets}).`
+            : `L'exercice « ${cfg.exerciseName || cfg.exerciseId} » a un plan de repos contenant des valeurs invalides (NaN/Infinity).`,
         });
       }
 

@@ -37,36 +37,59 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
 
-  // Navigation requests: Stale-While-Revalidate or Network-First
+  const url = new URL(event.request.url);
+
+  // Vite dev endpoints (transformed source, optimized deps, virtual modules)
+  // must NEVER be served from the app cache: a stale cached transform that
+  // outlives its dependencies produced a duplicated React instance and the
+  // "Invalid hook call" black screen. When online they always hit the network.
+  const isDevEndpoint =
+    url.origin === self.location.origin &&
+    (url.pathname.startsWith('/node_modules/.vite/') ||
+      url.pathname.includes('/@id/') ||
+      url.pathname.includes('/@fs/') ||
+      /\?import$/.test(url.search) ||
+      url.pathname.startsWith('/src/'));
+
+  // Navigation requests: Stale-While-Revalidate (fast loads, offline shell).
+  if (event.request.mode === 'navigate') {
+    event.respondWith(
+      caches.match(event.request).then((cachedResponse) => {
+        const networkFetch = fetch(event.request)
+          .then((networkResponse) => {
+            if (networkResponse && networkResponse.status === 200) {
+              caches.open(CACHE_NAME).then((cache) => cache.put(event.request, networkResponse.clone()));
+            }
+            return networkResponse;
+          })
+          .catch(() => cachedResponse || caches.match(`${BASE}index.html`));
+        if (cachedResponse) {
+          // Serve the cached shell immediately, refresh it in the background.
+          networkFetch.catch(() => {});
+          return cachedResponse;
+        }
+        return networkFetch;
+      })
+    );
+    return;
+  }
+
+  // Non-navigation GETs (JS/CSS chunks, icons, ...): Network-First with cache
+  // fallback. Hashed builds make the network always authoritative, so we never
+  // serve a stale module while the app runs; the cache only covers offline.
   event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
-      if (cachedResponse) {
-        // Fetch in background to update cache
-        fetch(event.request).then((networkResponse) => {
-          if (networkResponse && networkResponse.status === 200) {
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, networkResponse));
-          }
-        }).catch(() => {
-          // Offline, cachedResponse will suffice
-        });
-        return cachedResponse;
-      }
-      return fetch(event.request).then((networkResponse) => {
-        if (!networkResponse || networkResponse.status !== 200 || networkResponse.type !== 'basic') {
-          return networkResponse;
+    fetch(event.request)
+      .then((networkResponse) => {
+        if (
+          networkResponse &&
+          networkResponse.status === 200 &&
+          networkResponse.type === 'basic' &&
+          !isDevEndpoint
+        ) {
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, networkResponse.clone()));
         }
-        const responseToCache = networkResponse.clone();
-        caches.open(CACHE_NAME).then((cache) => {
-          cache.put(event.request, responseToCache);
-        });
         return networkResponse;
-      }).catch(() => {
-        // Fallback for navigation requests: the offline app shell lives at the
-        // base path — never assume `/index.html` is at the domain root.
-        if (event.request.mode === 'navigate') {
-          return caches.match(`${BASE}index.html`);
-        }
-      });
-    })
+      })
+      .catch(() => caches.match(event.request))
   );
 });

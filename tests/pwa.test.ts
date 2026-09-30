@@ -106,7 +106,7 @@ for (const ic of manifest.icons) {
       assert.ok(info, `${ic.src} n'est pas un PNG lisible`);
     });
     if (info) {
-      const [w, h] = (ic.sizes || 'x').split('x').map((n) => parseInt(n, 10));
+      const [w, h] = (ic.sizes || 'x').split('x').map((n: string) => parseInt(n, 10));
       ok(`icône ${ic.src} dimensions ${ic.sizes}`, () => {
         assert.equal(info.w, w, 'largeur PNG');
         assert.equal(info.h, h, 'hauteur PNG');

@@ -1,4 +1,4 @@
-import { WorkoutSession, ExercisePerformance, PersonalRecord } from './types';
+import { WorkoutSession, ExercisePerformance, PersonalRecord, MuscleGroup, WorkoutSet } from './types';
 import { analyzeProgression, type ProgressionTrend } from './utilsProgression';
 import { computeSessionXp } from './utilsXp';
 
@@ -479,4 +479,294 @@ export function computeYearlyVolumeTrend(sessions: WorkoutSession[], year: numbe
     }
   }
   return Array.from(buckets.values()).sort((a, b) => a.key.localeCompare(b.key));
+}
+
+// ----------------------------------------------------------------------------
+// LOT E.2 — Statistiques par groupe musculaire.
+// Pure, read-only, deterministic helpers. Work with the existing data model:
+//   - WorkoutSession.exercises[] are SessionExerciseLog[],
+//     each having muscleGroup: MuscleGroup | string.
+//   - No IndexedDB, no data mutation, no NaN / Infinity.
+// ----------------------------------------------------------------------------
+
+// Les 8 groupes musculaires définis dans types.ts, dans l'ordre cohérent.
+export const MuscleGroupList: readonly MuscleGroup[] = [
+  'Pectoraux',
+  'Dos',
+  'Épaules',
+  'Bras',
+  'Jambes',
+  'Abdos',
+  'Full Body',
+  'Cardio',
+];
+
+// Vérifie si une chaîne de caractères correspond à une valeur MuscleGroup valide.
+function isValidMuscleGroup(value: string): value is MuscleGroup {
+  return MuscleGroupList.includes(value as MuscleGroup);
+}
+
+// Retourne le groupe musculaire lu depuis un SessionExerciseLog.
+// Le champ muscleGroup est de type MuscleGroup | string; on normalise ici.
+function readMuscleGroupFromLog(muscleGroup: MuscleGroup | string): MuscleGroup | undefined {
+  if (typeof muscleGroup === 'string' && isValidMuscleGroup(muscleGroup)) {
+    return muscleGroup as MuscleGroup;
+  }
+  return undefined;
+}
+
+// -------------------------------------------------------
+// Volume total (kg) pour un groupe musculaire sur l'ensemble des séances.
+// -------------------------------------------------------
+export function computeMuscleGroupVolume(
+  sessions: WorkoutSession[],
+  muscleGroup: MuscleGroup
+): number {
+  let volume = 0;
+  for (const session of sessions) {
+    for (const log of session.exercises || []) {
+      const logGroup = readMuscleGroupFromLog(log.muscleGroup);
+      if (logGroup !== muscleGroup) continue;
+      for (const set of log.sets || []) {
+        if (set.completed && set.mode !== 'timer' && set.reps > 0 && set.weightKg > 0) {
+          volume += set.weightKg * set.reps;
+        }
+      }
+    }
+  }
+  return volume;
+}
+
+// -------------------------------------------------------
+// Fréquence : nombre de séances distinctes où au moins une série
+// du groupe musculaire a été réalisée en mode 'reps' completed.
+// -------------------------------------------------------
+export function computeMuscleGroupFrequency(
+  sessions: WorkoutSession[],
+  muscleGroup: MuscleGroup
+): number {
+  const sessionIds = new Set<string>();
+  for (const session of sessions) {
+    let found = false;
+    for (const log of session.exercises || []) {
+      const logGroup = readMuscleGroupFromLog(log.muscleGroup);
+      if (logGroup !== muscleGroup) continue;
+      for (const set of log.sets || []) {
+        if (set.completed && set.mode !== 'timer' && set.reps > 0) {
+          found = true;
+          break;
+        }
+      }
+      if (found) break;
+    }
+    if (found) sessionIds.add(session.id);
+  }
+  return sessionIds.size;
+}
+
+// -------------------------------------------------------
+// Nombre d'exercices distincts (par id) ayant ce groupe musculaire.
+// -------------------------------------------------------
+export function computeMuscleGroupExerciseCount(
+  sessions: WorkoutSession[],
+  muscleGroup: MuscleGroup
+): number {
+  const exerciseIds = new Set<string>();
+  for (const session of sessions) {
+    for (const log of session.exercises || []) {
+      const logGroup = readMuscleGroupFromLog(log.muscleGroup);
+      if (logGroup !== muscleGroup) continue;
+      exerciseIds.add(log.exerciseId);
+    }
+  }
+  return exerciseIds.size;
+}
+
+// -------------------------------------------------------
+// Détermine la tendance de progression pour un groupe musculaire.
+// Réutilise analyzeProgression sur les exercices du groupe.
+// Retourne l'un des 4 valeurs de ProgressionTrend.
+// -------------------------------------------------------
+export function computeMuscleGroupTrend(
+  sessions: WorkoutSession[],
+  muscleGroup: MuscleGroup
+): 'progressing' | 'stagnating' | 'regressing' | 'insufficient' {
+  const exercisePerformances: ExercisePerformance[] = [];
+  for (const session of sessions) {
+    for (const log of session.exercises || []) {
+      const logGroup = readMuscleGroupFromLog(log.muscleGroup);
+      if (logGroup !== muscleGroup) continue;
+      const sets = log.sets || [];
+      const completedSets = sets.filter((s) => s.completed);
+      if (completedSets.length === 0) continue;
+
+      let mode: ExerciseMode = 'reps';
+      for (const s of completedSets) {
+        if (s.mode === 'timer') {
+          mode = 'timer';
+          break;
+        }
+      }
+
+      let totalReps = 0;
+      let totalDuration = 0;
+      let totalVolume = 0;
+      let maxWeight = 0;
+      for (const s of completedSets) {
+        if (s.mode === 'reps') {
+          totalReps += s.reps;
+          totalVolume += s.weightKg * s.reps;
+          if (s.weightKg > maxWeight) maxWeight = s.weightKg;
+        } else if (s.mode === 'timer') {
+          totalDuration += s.durationSec || 0;
+          if (s.weightKg > maxWeight) maxWeight = s.weightKg;
+        }
+      }
+
+      exercisePerformances.push({
+        id: `${session.id}-${log.exerciseId}`,
+        exerciseId: log.exerciseId,
+        exerciseName: log.exerciseName,
+        sessionId: session.id,
+        sessionTitle: session.title,
+        date: session.date,
+        mode,
+        setsPlanned: sets.length,
+        setsCompleted: completedSets.length,
+        totalReps,
+        totalDurationSec: totalDuration,
+        totalVolumeKg: totalVolume,
+        weightUsedKg: maxWeight,
+        sets,
+        bestSet: completedSets.length > 0
+          ? {
+              setNumber: completedSets[0].setNumber,
+              weightKg: maxWeight,
+              reps: totalReps > 0 ? totalReps : completedSets[0].reps,
+              durationSec: mode === 'timer' ? totalDuration : undefined,
+            }
+          : null,
+      });
+    }
+  }
+
+  if (exercisePerformances.length === 0) return 'insufficient';
+
+  const groupedByExercise = new Map<string, ExercisePerformance[]>();
+  for (const p of exercisePerformances) {
+    const key = p.exerciseId;
+    if (!groupedByExercise.has(key)) groupedByExercise.set(key, []);
+    groupedByExercise.get(key)!.push(p);
+  }
+
+  let progressing = 0;
+  let stagnating = 0;
+  let regressing = 0;
+  let totalWithTrend = 0;
+
+  for (const [, performances] of groupedByExercise) {
+    const analysis = analyzeProgression(performances, performances[0].exerciseId);
+    if (analysis.trend === 'insufficient') continue;
+    totalWithTrend++;
+    if (analysis.trend === 'progressing') progressing++;
+    else if (analysis.trend === 'stagnating') stagnating++;
+    else if (analysis.trend === 'regressing') regressing++;
+  }
+
+  if (totalWithTrend === 0) return 'insufficient';
+
+  if (progressing > stagnating && progressing > regressing && progressing > 0) return 'progressing';
+  if (stagnating > regressing && stagnating > 0) return 'stagnating';
+  if (regressing > 0) return 'regressing';
+  return 'insufficient';
+}
+
+// -------------------------------------------------------
+// Retourne la liste des noms d'exercices principaux associés à un groupe.
+// On utilise la bibliothèque d'exercices si disponible.
+// -------------------------------------------------------
+export function getMuscleGroupExerciseNames(
+  sessions: WorkoutSession[],
+  muscleGroup: MuscleGroup,
+  exercisesById: Record<string, Exercise>
+): string[] {
+  const names = new Set<string>();
+  for (const session of sessions) {
+    for (const log of session.exercises || []) {
+      const logGroup = readMuscleGroupFromLog(log.muscleGroup);
+      if (logGroup !== muscleGroup) continue;
+      const exercise = exercisesById[log.exerciseId];
+      if (exercise && exercise.name) {
+        names.add(exercise.name);
+      } else {
+        names.add(log.exerciseName || 'Exercice inconnu');
+      }
+    }
+  }
+  return Array.from(names);
+}
+
+// -------------------------------------------------------
+// Point d'entrée : retourne les stats d'un groupe sous forme compacte.
+// -------------------------------------------------------
+export interface MuscleGroupStats {
+  volume: number;
+  frequency: number;
+  exerciseCount: number;
+  trend: 'progressing' | 'stagnating' | 'regressing' | 'insufficient';
+}
+
+// LOT E.3 — RPE helpers (pure, no React, no IndexedDB).
+// RPE = Rate of Perceived Exertion, échelle 1 à 10, optionnelle.
+
+// Validation simple : 1..10, nulle est acceptée (signifie "non renseigné").
+export function isValidRPE(value: number): boolean {
+  return Number.isFinite(value) && value >= 1 && value <= 10;
+}
+
+// Moyenne RPE sur un ensemble de séries, ignorant les valeurs undefined.
+// Si aucune série ne possède de RPE, retourne null.
+export function computeAverageRPE(sets: WorkoutSet[]): number | null {
+  const validRpes = sets
+    .map((s) => s.rpe)
+    .filter((r): r is number => isValidRPE(r));
+  if (validRpes.length === 0) return null;
+  const sum = validRpes.reduce((acc, val) => acc + val, 0);
+  return Number((sum / validRpes.length).toFixed(1));
+}
+
+// Statistiques RPE complètes sur un ensemble de séries.
+// Ignore les séries sans RPE (undefined).
+export function computeRPEStats(sets: WorkoutSet[]): {
+  average: number | null;
+  count: number; // nombre de séries ayant un RPE valide
+  min: number | null;
+  max: number | null;
+} {
+  const validRpes = sets.map((s) => s.rpe).filter(isValidRPE);
+  const count = validRpes.length;
+  if (count === 0) {
+    return { average: null, count, min: null, max: null };
+  }
+  const sorted = [...validRpes].sort((a, b) => a - b);
+  const sum = sorted.reduce((acc, val) => acc + val, 0);
+  return {
+    average: Number((sum / count).toFixed(1)),
+    count,
+    min: sorted[0],
+    max: sorted[count - 1],
+  };
+}
+
+export function computeMuscleGroupStats(
+  sessions: WorkoutSession[],
+  muscleGroup: MuscleGroup,
+  exercisesById: Record<string, Exercise>
+): MuscleGroupStats {
+  return {
+    volume: computeMuscleGroupVolume(sessions, muscleGroup),
+    frequency: computeMuscleGroupFrequency(sessions, muscleGroup),
+    exerciseCount: computeMuscleGroupExerciseCount(sessions, muscleGroup),
+    trend: computeMuscleGroupTrend(sessions, muscleGroup),
+  };
 }

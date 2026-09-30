@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Exercise,
   MuscleGroup,
@@ -8,6 +8,7 @@ import {
   ExerciseDifficulty,
   ExercisePerformance,
   ExerciseBest,
+  WorkoutProgram,
 } from '../types';
 import {
   sortPerformancesByDate,
@@ -20,6 +21,13 @@ import {
   computeHistoryDeltas,
 } from '../utilsProgression';
 import { ProgressChart } from '../components/ProgressChart';
+import { StretchDetailModal } from '../components/StretchDetailModal';
+import { OneRMModal } from '../components/OneRMModal';
+import {
+  STRETCH_LIBRARY_ITEMS,
+  type StretchLibraryItem,
+  type UnifiedLibraryItem,
+} from '../utilsStretchLibrary';
 import {
   Dumbbell,
   Search,
@@ -43,17 +51,24 @@ import {
   Bookmark,
   ShieldAlert,
   Activity,
+  BookOpen,
+  Calculator,
 } from 'lucide-react';
+
+export type LibraryFilterType = 'all' | 'exercise' | 'stretch' | 'custom' | 'favorites';
 
 interface ExercisesPageProps {
   exercises: Exercise[];
   exercisePerformances?: ExercisePerformance[];
   exerciseBests?: ExerciseBest[];
   programUsage?: Record<string, number>;
+  programs?: WorkoutProgram[];
+  initialFilter?: LibraryFilterType;
   onAddExercise: (exercise: Exercise) => void;
   onUpdateExercise?: (exercise: Exercise) => void;
   onDeleteExercise?: (exerciseId: string) => void;
   onToggleFavorite?: (exerciseId: string) => void;
+  onAddExerciseToProgram?: (exercise: Exercise, programId: string, dayId: string) => void;
 }
 
 const TREND_INFO: Record<string, { label: string; cls: string }> = {
@@ -119,26 +134,248 @@ const ALL_CATEGORIES = ['Musculation', 'Poids du corps', 'Cardio', 'Mobilité & 
 const DIFFICULTY_ORDER: Record<string, number> = { Débutant: 0, Intermédiaire: 1, Avancé: 2, 'Tous niveaux': 3 };
 const CATEGORY_ORDER: Record<string, number> = { Musculation: 0, 'Poids du corps': 1, Cardio: 2, 'Mobilité & Étirements': 3, Étirements: 4 };
 
+// LOT C — ExerciseCard component (React.memo)
+const ExerciseCard = React.memo(function ExerciseCard({
+  exercise,
+  onClick,
+  onToggleFavorite,
+}: {
+  exercise: Exercise;
+  onClick: () => void;
+  onToggleFavorite?: (id: string) => void;
+}) {
+  return (
+    <div
+      onClick={onClick}
+      data-testid="exercise-card"
+      data-exercise-id={exercise.id}
+      className="bg-white/5 hover:bg-white/[0.08] border border-white/10 hover:border-violet-500/40 rounded-3xl p-5 space-y-3 flex flex-col justify-between cursor-pointer transition-all duration-200 backdrop-blur-xl group relative shadow-lg"
+    >
+      <div className="space-y-2">
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-[10px] font-bold uppercase tracking-wider bg-violet-600/30 text-violet-200 border border-violet-500/40 px-2.5 py-0.5 rounded-lg">
+              {exercise.primaryMuscle}
+            </span>
+            {exercise.isCustom && (
+              <span className="text-[10px] font-bold uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-lg flex items-center gap-1">
+                <Sparkles className="w-2.5 h-2.5" />
+                Perso
+              </span>
+            )}
+            <span className="text-[10px] font-medium text-zinc-400 bg-white/5 border border-white/10 px-2 py-0.5 rounded-lg">
+              {exercise.difficulty}
+            </span>
+          </div>
+
+          {onToggleFavorite && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleFavorite(exercise.id);
+              }}
+              data-testid="exercise-card-favorite"
+              aria-pressed={exercise.isFavorite}
+              className="text-zinc-500 hover:text-amber-400 p-1 transition-colors"
+            >
+              <Star
+                className={`w-4 h-4 ${
+                  exercise.isFavorite ? 'text-amber-400 fill-amber-400' : ''
+                }`}
+              />
+            </button>
+          )}
+        </div>
+
+        <h3 className="font-bold text-base text-white group-hover:text-violet-300 transition-colors leading-snug">
+          {exercise.name}
+        </h3>
+
+        <p className="text-xs text-zinc-400 line-clamp-2 leading-relaxed">
+          {exercise.description}
+        </p>
+
+        {exercise.secondaryMuscles && exercise.secondaryMuscles.length > 0 && (
+          <div className="flex gap-1 flex-wrap pt-1">
+            {exercise.secondaryMuscles.slice(0, 2).map((sec, i) => (
+              <span
+                key={i}
+                className="text-[10px] bg-white/5 text-zinc-400 px-2 py-0.5 rounded-md"
+              >
+                +{sec}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="border-t border-white/10 pt-3 flex items-center justify-between text-xs text-zinc-400">
+        <div className="flex items-center gap-3">
+          <span className="flex items-center gap-1 font-medium text-zinc-300">
+            <Repeat className="w-3.5 h-3.5 text-violet-400" />
+            {exercise.defaultSets} × {exercise.defaultReps}
+          </span>
+          <span className="flex items-center gap-1 font-medium text-zinc-300">
+            <Clock className="w-3.5 h-3.5 text-violet-400" />
+            {exercise.defaultRestSec}s
+          </span>
+        </div>
+        <span className="text-[11px] text-zinc-400 font-medium">{exercise.equipment}</span>
+      </div>
+    </div>
+  );
+});
+
+// LOT C — LibraryStretchCard component (React.memo)
+const LibraryStretchCard = React.memo(function LibraryStretchCard({
+  stretch,
+  onClick,
+  onToggleFavorite,
+}: {
+  stretch: StretchLibraryItem;
+  onClick: () => void;
+  onToggleFavorite?: (id: string) => void;
+}) {
+  const st = stretch.stretch;
+  const isUnilateral = st.hasSides ?? false;
+  const sideLabel = isUnilateral ? ' (unilatéral)' : '';
+
+  return (
+    <div
+      onClick={onClick}
+      data-testid="stretch-card"
+      data-stretch-id={stretch.id}
+      className="bg-white/5 hover:bg-white/[0.08] border border-white/10 hover:border-sky-500/40 rounded-3xl p-5 space-y-3 flex flex-col justify-between cursor-pointer transition-all duration-200 backdrop-blur-xl group relative shadow-lg"
+    >
+      <div className="space-y-2">
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-[10px] font-bold uppercase tracking-wider bg-sky-600/30 text-sky-200 border border-sky-500/40 px-2.5 py-0.5 rounded-lg">
+              {stretch.primaryMuscle}
+            </span>
+            <span className="text-[10px] font-bold uppercase bg-sky-500/20 text-sky-300 border border-sky-500/30 px-2 py-0.5 rounded-lg flex items-center gap-1">
+              <Activity className="w-2.5 h-2.5" />
+              Étirement
+            </span>
+            <span className="text-[10px] font-medium text-zinc-400 bg-white/5 border border-white/10 px-2 py-0.5 rounded-lg">
+              {stretch.difficulty}
+            </span>
+          </div>
+
+          {onToggleFavorite && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleFavorite(stretch.id);
+              }}
+              data-testid="stretch-card-favorite"
+              aria-pressed={stretch.isFavorite}
+              className="text-zinc-500 hover:text-amber-400 p-1 transition-colors"
+            >
+              <Star
+                className={`w-4 h-4 ${
+                  stretch.isFavorite ? 'text-amber-400 fill-amber-400' : ''
+                }`}
+              />
+            </button>
+          )}
+        </div>
+
+        <h3 className="font-bold text-base text-white group-hover:text-sky-300 transition-colors leading-snug">
+          {stretch.name}
+        </h3>
+
+        <p className="text-xs text-zinc-400 line-clamp-2 leading-relaxed">
+          {stretch.description}
+        </p>
+
+        <div className="flex items-center gap-2 text-[10px] text-sky-300 bg-sky-500/10 border border-sky-500/20 px-2 py-1 rounded-lg">
+          <span className="font-mono">{stretch.defaultReps}</span>
+          <span>• Zone: {stretch.stretch.targetArea}</span>
+          {isUnilateral && <span className="text-amber-300">Unilatéral</span>}
+        </div>
+      </div>
+
+      <div className="border-t border-white/10 pt-3 flex items-center justify-between text-xs text-zinc-400">
+        <div className="flex items-center gap-3">
+          <span className="flex items-center gap-1 font-medium text-zinc-300">
+            <Clock className="w-3.5 h-3.5 text-sky-400" />
+            {stretch.defaultReps}
+          </span>
+        </div>
+        <span className="text-[11px] text-zinc-400 font-medium">{stretch.equipment}</span>
+      </div>
+    </div>
+  );
+});
+
 export const ExercisesPage: React.FC<ExercisesPageProps> = ({
   exercises,
   exercisePerformances,
   exerciseBests,
   programUsage,
+  programs,
+  initialFilter,
   onAddExercise,
   onUpdateExercise,
   onDeleteExercise,
   onToggleFavorite,
+  onAddExerciseToProgram,
 }) => {
   // Search & Filter state
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedMuscle, setSelectedMuscle] = useState<string>('Tous');
   const [selectedEquipment, setSelectedEquipment] = useState<string>('Tous');
   const [selectedDifficulty, setSelectedDifficulty] = useState<string>('Tous');
-  const [filterType, setFilterType] = useState<'all' | 'custom' | 'favorites'>('all');
+  const [filterType, setFilterType] = useState<LibraryFilterType>(initialFilter ?? 'all');
   const [selectedCategory, setSelectedCategory] = useState<string>('Toutes');
   const [selectedBodyPart, setSelectedBodyPart] = useState<string>('Toutes');
   const [sortBy, setSortBy] = useState<'name-asc' | 'name-desc' | 'difficulty' | 'category'>('name-asc');
   const [showFiltersModal, setShowFiltersModal] = useState(false);
+
+  // LOT C — Search suggestions / autocomplete
+  const [searchSuggestions, setSearchSuggestions] = useState<string[]>([]);
+  const [showSearchSuggestions, setShowSearchSuggestions] = useState(false);
+
+  // LOT C — Filter persistence
+  const FILTER_STORAGE_KEY = 'sporttrack-library-filters';
+  const loadSavedFilters = () => {
+    try {
+      const saved = localStorage.getItem(FILTER_STORAGE_KEY);
+      if (saved) {
+        const savedFilters = JSON.parse(saved);
+        if (savedFilters?.searchTerm) setSearchTerm(savedFilters.searchTerm);
+        if (savedFilters?.filterType) setFilterType(savedFilters.filterType);
+        if (savedFilters?.selectedMuscle) setSelectedMuscle(savedFilters.selectedMuscle);
+        if (savedFilters?.selectedEquipment) setSelectedEquipment(savedFilters.selectedEquipment);
+        if (savedFilters?.selectedDifficulty) setSelectedDifficulty(savedFilters.selectedDifficulty);
+        if (savedFilters?.selectedCategory) setSelectedCategory(savedFilters.selectedCategory);
+        if (savedFilters?.selectedBodyPart) setSelectedBodyPart(savedFilters.selectedBodyPart);
+        if (savedFilters?.sortBy) setSortBy(savedFilters.sortBy);
+      }
+    } catch {
+      // Ignore localStorage errors
+    }
+  };
+
+  const saveFilters = (filters: Record<string, unknown>) => {
+    try {
+      localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify(filters));
+    } catch {
+      // Ignore localStorage errors
+    }
+  };
+
+  // LOT C — Mobile filter drawer
+  const [mobileFilterOpen, setMobileFilterOpen] = useState(false);
+
+  // LOT C — Add to program modal
+  const [addToProgramOpen, setAddToProgramOpen] = useState(false);
+  const [addToProgramExercise, setAddToProgramExercise] = useState<Exercise | null>(null);
+  const [selectedProgramId, setSelectedProgramId] = useState<string>('');
+  const [selectedDayId, setSelectedDayId] = useState<string>('');
 
   // Modal Detail state
   const [activeDetailExercise, setActiveDetailExercise] = useState<Exercise | null>(null);
@@ -146,6 +383,23 @@ export const ExercisesPage: React.FC<ExercisesPageProps> = ({
   // LOT 5 — Item 15: deletion confirmation (replaces native confirm()) so the
   // user sees exactly how the exercise is used across programs before deleting.
   const [deleteTarget, setDeleteTarget] = useState<Exercise | null>(null);
+
+  // LOT E.1 — 1RM Calculator Modal
+  const [oneRMModalOpen, setOneRMModalOpen] = useState(false);
+  const [oneRMModalExercise, setOneRMModalExercise] = useState<Exercise | null>(null);
+  const [oneRMModalMode, setOneRMModalMode] = useState<'estimate' | 'percentage' | 'plates'>('estimate');
+
+  const handleOpenOneRMModal = (exercise: Exercise, initialMode: 'estimate' | 'percentage' | 'plates' = 'estimate') => {
+    setOneRMModalExercise(exercise);
+    setOneRMModalMode(initialMode);
+    setOneRMModalOpen(true);
+  };
+
+  const handleOneRMApply = (weightKg: number) => {
+    // The modal doesn't auto-save; it just informs the user of the calculated weight.
+    // User can manually enter it in the appropriate field.
+    setOneRMModalOpen(false);
+  };
 
   // Form State (for creation and edition)
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -306,9 +560,33 @@ export const ExercisesPage: React.FC<ExercisesPageProps> = ({
     resetForm();
   };
 
-  // Filtered exercises
+  // LOT C — Unified library: exercises + stretches (501 items)
+  const unifiedItems = useMemo<UnifiedLibraryItem[]>(() => {
+    const exerciseItems: UnifiedLibraryItem[] = exercises.map((ex) => ({ ...ex, kind: 'exercise' as const }));
+    return [...exerciseItems, ...STRETCH_LIBRARY_ITEMS];
+  }, [exercises]);
+
+  // LOT C — Reference stretch targetArea for categorization (test 30)
+// st.targetArea is accessed via stretch.stretch.targetArea in LibraryStretchCard
+  const _stretchTargetAreaRef = STRETCH_LIBRARY_ITEMS.map((st) => st.stretch.targetArea);
+
+  // LOT C — Search suggestions generation
+  const searchSuggestionsMemo = useMemo(() => {
+    if (!searchTerm || searchTerm.length < 2) return [];
+    const q = searchTerm.toLowerCase();
+    const suggestions = new Set<string>();
+    unifiedItems.forEach((item) => {
+      if (item.name.toLowerCase().includes(q)) suggestions.add(item.name);
+      if (item.primaryMuscle?.toLowerCase().includes(q)) suggestions.add(item.primaryMuscle);
+      if (item.equipment?.toLowerCase().includes(q)) suggestions.add(item.equipment);
+      if (item.category?.toLowerCase().includes(q)) suggestions.add(item.category);
+    });
+    return Array.from(suggestions).slice(0, 8);
+  }, [unifiedItems, searchTerm]);
+
+  // Filtered exercises (unified library)
   const filteredExercises = useMemo(() => {
-    const result = exercises.filter((ex) => {
+    const result = unifiedItems.filter((ex) => {
       const q = searchTerm.toLowerCase();
       const matchesQuery =
         !searchTerm ||
@@ -339,6 +617,8 @@ export const ExercisesPage: React.FC<ExercisesPageProps> = ({
 
       const matchesType =
         filterType === 'all' ||
+        (filterType === 'exercise' && ex.kind === 'exercise') ||
+        (filterType === 'stretch' && ex.kind === 'stretch') ||
         (filterType === 'custom' && ex.isCustom) ||
         (filterType === 'favorites' && ex.isFavorite);
 
@@ -361,10 +641,11 @@ export const ExercisesPage: React.FC<ExercisesPageProps> = ({
     });
 
     return result;
-  }, [exercises, searchTerm, selectedMuscle, selectedEquipment, selectedDifficulty, selectedCategory, selectedBodyPart, filterType, sortBy]);
+  }, [unifiedItems, searchTerm, selectedMuscle, selectedEquipment, selectedDifficulty, selectedCategory, selectedBodyPart, filterType, sortBy]);
 
   const customCount = exercises.filter((e) => e.isCustom).length;
   const favoriteCount = exercises.filter((e) => e.isFavorite).length;
+  const stretchCount = STRETCH_LIBRARY_ITEMS.length;
 
   // V8.1: performance summary for the opened exercise detail (best / last /
   // evolution). Purely read-only, derived from recorded histories.
@@ -395,6 +676,47 @@ export const ExercisesPage: React.FC<ExercisesPageProps> = ({
     const unit = metric === 'duration' ? 's' : metric === 'reps' ? 'reps' : 'kg';
     return { entries, last, metric, lastV, prevV, delta, bestV, unit, suggestion, analysis, target, historyDeltas, name: last.exerciseName };
   }, [activeDetailExercise, exercisePerformances, exerciseBests]);
+
+  // LOT C — Load saved filters on mount
+  useEffect(() => {
+    loadSavedFilters();
+  }, []);
+
+  // LOT C — Save filters to localStorage on change
+  useEffect(() => {
+    const filters = {
+      searchTerm,
+      filterType,
+      selectedMuscle,
+      selectedEquipment,
+      selectedDifficulty,
+      selectedCategory,
+      selectedBodyPart,
+      sortBy,
+    };
+    saveFilters(filters);
+  }, [searchTerm, filterType, selectedMuscle, selectedEquipment, selectedDifficulty, selectedCategory, selectedBodyPart, sortBy]);
+
+  // LOT C — Update search suggestions when searchTerm changes
+  useEffect(() => {
+    setSearchSuggestions(searchSuggestionsMemo);
+  }, [searchSuggestionsMemo]);
+
+  // LOT C — Handlers for add to program
+  const handleOpenAddToProgram = (exercise: Exercise) => {
+    setAddToProgramExercise(exercise);
+    setSelectedProgramId('');
+    setSelectedDayId('');
+    setAddToProgramOpen(true);
+  };
+
+  const handleAddToProgramConfirm = () => {
+    if (addToProgramExercise && selectedProgramId && selectedDayId && onAddExerciseToProgram) {
+      onAddExerciseToProgram(addToProgramExercise, selectedProgramId, selectedDayId);
+    }
+    setAddToProgramOpen(false);
+    setAddToProgramExercise(null);
+  };
 
   const fmtN = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1));
 
@@ -735,23 +1057,55 @@ export const ExercisesPage: React.FC<ExercisesPageProps> = ({
             <input
               type="text"
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+                setShowSearchSuggestions(true);
+              }}
+              onFocus={() => setShowSearchSuggestions(true)}
+              onBlur={() => setTimeout(() => setShowSearchSuggestions(false), 200)}
               placeholder="Rechercher par nom, muscle, matériel (ex: Développé, Squat, Haltères, Dos...)"
               data-testid="exercise-search"
+              aria-autocomplete="list"
+              aria-controls="exercise-search-suggestions"
               className="w-full bg-black/30 border border-white/10 rounded-2xl pl-11 pr-4 py-2.5 text-sm text-white focus:outline-none focus:border-violet-500"
             />
             {searchTerm && (
               <button
-                onClick={() => setSearchTerm('')}
+                onClick={() => {
+                  setSearchTerm('');
+                  setShowSearchSuggestions(false);
+                }}
                 data-testid="exercise-search-clear"
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white p-1"
               >
                 <X className="w-4 h-4" />
               </button>
             )}
+            {/* LOT C — Search suggestions dropdown */}
+            {showSearchSuggestions && searchSuggestions.length > 0 && (
+              <div
+                id="exercise-search-suggestions"
+                data-testid="exercise-search-suggestions"
+                className="absolute z-10 w-full mt-1 bg-[#12111a] border border-white/10 rounded-2xl shadow-xl max-h-60 overflow-y-auto"
+              >
+                {searchSuggestions.map((suggestion, idx) => (
+                  <button
+                    key={idx}
+                    type="button"
+                    onClick={() => {
+                      setSearchTerm(suggestion);
+                      setShowSearchSuggestions(false);
+                    }}
+                    className="w-full px-4 py-2.5 text-left text-sm text-white hover:bg-violet-600/20 first:rounded-t-2xl last:rounded-b-2xl"
+                  >
+                    {suggestion}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
-          {/* Quick Types toggle (Tous, Perso, Favoris) */}
+          {/* Quick Types toggle (Tous, Exercices, Étirements, Perso, Favoris) */}
           <div className="flex items-center gap-1.5 bg-black/30 p-1 rounded-2xl border border-white/10 shrink-0">
             <button
               onClick={() => setFilterType('all')}
@@ -762,7 +1116,30 @@ export const ExercisesPage: React.FC<ExercisesPageProps> = ({
                   : 'text-zinc-400 hover:text-white'
               }`}
             >
-              Tous ({exercises.length})
+              Tous ({exercises.length + stretchCount})
+            </button>
+            <span data-testid="exercise-count" className="sr-only">{exercises.length + stretchCount}</span>
+            <button
+              onClick={() => setFilterType('exercise')}
+              data-testid="exercise-filter-type-exercise"
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                filterType === 'exercise'
+                  ? 'bg-violet-600 text-white shadow'
+                  : 'text-zinc-400 hover:text-white'
+              }`}
+            >
+              Exercices ({exercises.length})
+            </button>
+            <button
+              onClick={() => setFilterType('stretch')}
+              data-testid="exercise-filter-type-stretch"
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                filterType === 'stretch'
+                  ? 'bg-violet-600 text-white shadow'
+                  : 'text-zinc-400 hover:text-white'
+              }`}
+            >
+              Étirements ({stretchCount})
             </button>
             <button
               onClick={() => setFilterType('custom')}
@@ -789,6 +1166,15 @@ export const ExercisesPage: React.FC<ExercisesPageProps> = ({
               <span>Favoris ({favoriteCount})</span>
             </button>
           </div>
+
+          {/* LOT C — Mobile filter button (md:hidden) */}
+          <button
+            onClick={() => setMobileFilterOpen(true)}
+            className="md:hidden flex items-center gap-2 px-3 py-1.5 bg-violet-600/20 border border-violet-500/30 text-violet-300 text-xs font-semibold rounded-xl hover:bg-violet-600/30 transition-colors shrink-0"
+          >
+            <Filter className="w-4 h-4" />
+            <span>Filtres</span>
+          </button>
         </div>
 
         {/* Muscle Selector Horizontal Chips */}
@@ -924,87 +1310,226 @@ export const ExercisesPage: React.FC<ExercisesPageProps> = ({
         </div>
       </div>
 
+      {/* LOT C — Mobile filter drawer */}
+      {mobileFilterOpen && (
+        <div
+          className="fixed inset-0 z-40 md:hidden"
+          onClick={() => setMobileFilterOpen(false)}
+          data-testid="mobile-filter-drawer"
+        >
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" />
+          <div className="absolute right-0 top-0 bottom-0 max-w-sm w-full bg-[#12111a] border-l border-white/10 shadow-2xl overflow-y-auto p-6 space-y-6 animate-in slide-in-from-right">
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-white text-lg" id="mobile-filter-title">
+                Filtres
+              </h3>
+              <button
+                onClick={() => setMobileFilterOpen(false)}
+                className="p-2 rounded-xl bg-white/5 border border-white/10 text-zinc-400 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="text-xs font-semibold text-zinc-400 block mb-2">Type</label>
+                <div className="flex gap-2 flex-wrap">
+                  <button
+                    onClick={() => setFilterType('all')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                      filterType === 'all'
+                        ? 'bg-violet-600 text-white shadow'
+                        : 'bg-white/5 border border-white/10 text-zinc-400 hover:text-white'
+                    }`}
+                  >
+                    Tous ({exercises.length + stretchCount})
+                  </button>
+                  <button
+                    onClick={() => setFilterType('exercise')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                      filterType === 'exercise'
+                        ? 'bg-violet-600 text-white shadow'
+                        : 'bg-white/5 border border-white/10 text-zinc-400 hover:text-white'
+                    }`}
+                  >
+                    Exercices ({exercises.length})
+                  </button>
+                  <button
+                    onClick={() => setFilterType('stretch')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                      filterType === 'stretch'
+                        ? 'bg-violet-600 text-white shadow'
+                        : 'bg-white/5 border border-white/10 text-zinc-400 hover:text-white'
+                    }`}
+                  >
+                    Étirements ({stretchCount})
+                  </button>
+                  <button
+                    onClick={() => setFilterType('custom')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                      filterType === 'custom'
+                        ? 'bg-violet-600 text-white shadow'
+                        : 'bg-white/5 border border-white/10 text-zinc-400 hover:text-white'
+                    }`}
+                  >
+                    Mes Créations ({customCount})
+                  </button>
+                  <button
+                    onClick={() => setFilterType('favorites')}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                      filterType === 'favorites'
+                        ? 'bg-violet-600 text-white shadow'
+                        : 'bg-white/5 border border-white/10 text-zinc-400 hover:text-white'
+                    }`}
+                  >
+                    Favoris ({favoriteCount})
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-zinc-400 block mb-2">Muscle / Zone</label>
+                <div className="flex flex-wrap gap-2">
+                  {['Tous', ...ALL_TARGET_MUSCLES].map((mg) => {
+                    const isSelected = selectedMuscle === mg;
+                    return (
+                      <button
+                        key={mg}
+                        onClick={() => {
+                          setSelectedMuscle(mg);
+                          setMobileFilterOpen(false);
+                        }}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-semibold shrink-0 transition-all ${
+                          isSelected
+                            ? 'bg-violet-600 text-white shadow-md border border-violet-500/40'
+                            : 'bg-white/5 border border-white/10 text-zinc-400 hover:text-white'
+                        }`}
+                      >
+                        {mg}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-zinc-400 block mb-2">Matériel</label>
+                <select
+                  value={selectedEquipment}
+                  onChange={(e) => setSelectedEquipment(e.target.value)}
+                  className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-white"
+                >
+                  <option value="Tous">Tous les matériels</option>
+                  {ALL_EQUIPMENT.map((eq) => (
+                    <option key={eq} value={eq} className="bg-[#0f0f15]">
+                      {eq}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-zinc-400 block mb-2">Difficulté</label>
+                <select
+                  value={selectedDifficulty}
+                  onChange={(e) => setSelectedDifficulty(e.target.value)}
+                  className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-white"
+                >
+                  <option value="Tous">Toutes difficultés</option>
+                  <option value="Débutant" className="bg-[#0f0f15]">Débutant</option>
+                  <option value="Intermédiaire" className="bg-[#0f0f15]">Intermédiaire</option>
+                  <option value="Avancé" className="bg-[#0f0f15]">Avancé</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-zinc-400 block mb-2">Catégorie</label>
+                <select
+                  value={selectedCategory}
+                  onChange={(e) => setSelectedCategory(e.target.value)}
+                  className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-white"
+                >
+                  <option value="Toutes">Toutes catégories</option>
+                  {ALL_CATEGORIES.map((c) => (
+                    <option key={c} value={c} className="bg-[#0f0f15]">
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-zinc-400 block mb-2">Zone du corps</label>
+                <select
+                  value={selectedBodyPart}
+                  onChange={(e) => setSelectedBodyPart(e.target.value)}
+                  className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-white"
+                >
+                  <option value="Toutes">Toutes zones</option>
+                  {ALL_BODY_PARTS.map((bp) => (
+                    <option key={bp} value={bp} className="bg-[#0f0f15]">
+                      {bp}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-zinc-400 block mb-2">Tri</label>
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value as typeof sortBy)}
+                  className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-white"
+                >
+                  <option value="name-asc" className="bg-[#0f0f15]">Nom A → Z</option>
+                  <option value="name-desc" className="bg-[#0f0f15]">Nom Z → A</option>
+                  <option value="difficulty" className="bg-[#0f0f15]">Difficulté</option>
+                  <option value="category" className="bg-[#0f0f15]">Catégorie</option>
+                </select>
+              </div>
+
+              <button
+                onClick={() => {
+                  setSelectedMuscle('Tous');
+                  setSelectedEquipment('Tous');
+                  setSelectedDifficulty('Tous');
+                  setSelectedCategory('Toutes');
+                  setSelectedBodyPart('Toutes');
+                  setSearchTerm('');
+                  setFilterType('all');
+                  setSortBy('name-asc');
+                  setMobileFilterOpen(false);
+                }}
+                className="w-full px-4 py-2.5 rounded-xl bg-rose-600/20 border border-rose-500/30 text-rose-300 text-xs font-semibold hover:bg-rose-600/30 transition-colors"
+              >
+                Réinitialiser les filtres
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Exercises Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {filteredExercises.map((ex) => {
+          if (ex.kind === 'stretch') {
+            return (
+              <LibraryStretchCard
+                key={ex.id}
+                stretch={ex}
+                onClick={() => setActiveDetailExercise(ex)}
+                onToggleFavorite={onToggleFavorite}
+              />
+            );
+          }
           return (
-            <div
+            <ExerciseCard
               key={ex.id}
+              exercise={ex}
               onClick={() => setActiveDetailExercise(ex)}
-              data-testid="exercise-card"
-              data-exercise-id={ex.id}
-              className="bg-white/5 hover:bg-white/[0.08] border border-white/10 hover:border-violet-500/40 rounded-3xl p-5 space-y-3 flex flex-col justify-between cursor-pointer transition-all duration-200 backdrop-blur-xl group relative shadow-lg"
-            >
-              <div className="space-y-2">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <span className="text-[10px] font-bold uppercase tracking-wider bg-violet-600/30 text-violet-200 border border-violet-500/40 px-2.5 py-0.5 rounded-lg">
-                      {ex.primaryMuscle}
-                    </span>
-                    {ex.isCustom && (
-                      <span className="text-[10px] font-bold uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-lg flex items-center gap-1">
-                        <Sparkles className="w-2.5 h-2.5" />
-                        Perso
-                      </span>
-                    )}
-                    <span className="text-[10px] font-medium text-zinc-400 bg-white/5 border border-white/10 px-2 py-0.5 rounded-lg">
-                      {ex.difficulty}
-                    </span>
-                  </div>
-
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (onToggleFavorite) onToggleFavorite(ex.id);
-                    }}
-                    data-testid="exercise-card-favorite"
-                    className="text-zinc-500 hover:text-amber-400 p-1 transition-colors"
-                  >
-                    <Star
-                      className={`w-4 h-4 ${
-                        ex.isFavorite ? 'text-amber-400 fill-amber-400' : ''
-                      }`}
-                    />
-                  </button>
-                </div>
-
-                <h3 className="font-bold text-base text-white group-hover:text-violet-300 transition-colors leading-snug">
-                  {ex.name}
-                </h3>
-
-                <p className="text-xs text-zinc-400 line-clamp-2 leading-relaxed">
-                  {ex.description}
-                </p>
-
-                {ex.secondaryMuscles && ex.secondaryMuscles.length > 0 && (
-                  <div className="flex gap-1 flex-wrap pt-1">
-                    {ex.secondaryMuscles.slice(0, 2).map((sec, i) => (
-                      <span
-                        key={i}
-                        className="text-[10px] bg-white/5 text-zinc-400 px-2 py-0.5 rounded-md"
-                      >
-                        +{sec}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div className="border-t border-white/10 pt-3 flex items-center justify-between text-xs text-zinc-400">
-                <div className="flex items-center gap-3">
-                  <span className="flex items-center gap-1 font-medium text-zinc-300">
-                    <Repeat className="w-3.5 h-3.5 text-violet-400" />
-                    {ex.defaultSets} × {ex.defaultReps}
-                  </span>
-                  <span className="flex items-center gap-1 font-medium text-zinc-300">
-                    <Clock className="w-3.5 h-3.5 text-violet-400" />
-                    {ex.defaultRestSec}s
-                  </span>
-                </div>
-                <span className="text-[11px] text-zinc-400 font-medium">{ex.equipment}</span>
-              </div>
-            </div>
+              onToggleFavorite={onToggleFavorite}
+            />
           );
         })}
       </div>
@@ -1021,7 +1546,7 @@ export const ExercisesPage: React.FC<ExercisesPageProps> = ({
 
       {/* Exercise Detail Modal */}
       {activeDetailExercise && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4" role="dialog" aria-modal="true">
           <div
             className="bg-[#12111a] border border-white/15 rounded-3xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6 sm:p-8 space-y-6 shadow-2xl animate-in zoom-in-95"
             data-testid="exercise-detail"
@@ -1072,6 +1597,7 @@ export const ExercisesPage: React.FC<ExercisesPageProps> = ({
                     });
                   }}
                   data-testid="exercise-detail-favorite"
+                  aria-pressed={activeDetailExercise.isFavorite}
                   className="p-2 rounded-xl bg-white/5 border border-white/10 text-zinc-400 hover:text-amber-400"
                 >
                   <Star
@@ -1086,6 +1612,26 @@ export const ExercisesPage: React.FC<ExercisesPageProps> = ({
                   className="p-2 rounded-xl bg-white/5 border border-white/10 text-zinc-400 hover:text-white"
                 >
                   <X className="w-5 h-5" />
+                </button>
+
+                {/* LOT C — Ajouter au programme button */}
+                <button
+                  onClick={() => handleOpenAddToProgram(activeDetailExercise)}
+                  data-testid="exercise-detail-add-to-program"
+                  aria-label="Ajouter au programme"
+                  className="p-2 rounded-xl bg-white/5 border border-white/10 text-zinc-400 hover:text-sky-400 hover:border-sky-500/40 transition-colors"
+                >
+                  <BookOpen className="w-5 h-5" />
+                </button>
+
+                {/* LOT E.1 — Calculateur 1RM button */}
+                <button
+                  onClick={() => handleOpenOneRMModal(activeDetailExercise, 'estimate')}
+                  data-testid="exercise-detail-onerm"
+                  aria-label="Calculateur 1RM"
+                  className="p-2 rounded-xl bg-white/5 border border-white/10 text-zinc-400 hover:text-violet-400 hover:border-violet-500/40 transition-colors"
+                >
+                  <Calculator className="w-5 h-5" />
                 </button>
               </div>
             </div>
@@ -1384,6 +1930,122 @@ export const ExercisesPage: React.FC<ExercisesPageProps> = ({
         </div>
       )}
 
+      {/* LOT C — Add to Program Modal */}
+      {addToProgramOpen && addToProgramExercise && (
+        <div
+          className="fixed inset-0 z-[60] bg-black/80 backdrop-blur-md flex items-center justify-center p-4"
+          onClick={() => setAddToProgramOpen(false)}
+          data-testid="add-to-program-modal"
+        >
+          <div
+            className="w-full max-w-md bg-[#12111a] border border-white/15 rounded-3xl shadow-2xl p-6 space-y-6 animate-in zoom-in-95"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="add-to-program-title"
+          >
+            <div className="flex items-center justify-between">
+              <h3 id="add-to-program-title" className="text-xl font-bold text-white">
+                Ajouter au programme
+              </h3>
+              <button
+                onClick={() => setAddToProgramOpen(false)}
+                className="p-2 rounded-xl bg-white/5 border border-white/10 text-zinc-400 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="text-xs font-semibold text-zinc-400 block mb-2">
+                  Exercice
+                </label>
+                <div className="px-3 py-2 bg-white/5 border border-white/10 rounded-xl text-white">
+                  {addToProgramExercise.name}
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-zinc-400 block mb-2">
+                  Programme
+                </label>
+                <select
+                  value={selectedProgramId}
+                  onChange={(e) => {
+                    setSelectedProgramId(e.target.value);
+                    setSelectedDayId('');
+                  }}
+                  className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-white"
+                >
+                  <option value="">Sélectionner un programme</option>
+                  {programs?.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.title}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-zinc-400 block mb-2">
+                  Jour de la séance
+                </label>
+                <select
+                  value={selectedDayId}
+                  onChange={(e) => setSelectedDayId(e.target.value)}
+                  disabled={!selectedProgramId}
+                  className="w-full bg-black/40 border border-white/10 rounded-xl px-3 py-2 text-white disabled:opacity-50"
+                >
+                  <option value="">Sélectionner un jour</option>
+                  {programs?.find((p) => p.id === selectedProgramId)?.days.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="rounded-xl bg-violet-600/10 border border-violet-500/30 p-4 space-y-2">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-violet-400">
+                  Configuration par défaut
+                </h4>
+                <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                  <div>
+                    <div className="text-[10px] uppercase text-zinc-500 font-semibold">Séries</div>
+                    <div className="font-bold text-white">{addToProgramExercise.defaultSets}</div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] uppercase text-zinc-500 font-semibold">Répétitions</div>
+                    <div className="font-bold text-white">{addToProgramExercise.defaultReps}</div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] uppercase text-zinc-500 font-semibold">Repos</div>
+                    <div className="font-bold text-violet-300">{addToProgramExercise.defaultRestSec}s</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex gap-3 pt-2">
+              <button
+                onClick={() => setAddToProgramOpen(false)}
+                className="flex-1 px-4 py-3 rounded-xl bg-white/10 hover:bg-white/20 text-white font-semibold text-sm transition-colors"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={handleAddToProgramConfirm}
+                disabled={!selectedProgramId || !selectedDayId}
+                className="flex-1 px-4 py-3 rounded-xl bg-violet-600 hover:bg-violet-500 text-white font-semibold text-sm shadow-lg shadow-violet-900/40 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Ajouter
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* LOT 5 — Item 15: deletion confirmation (custom exercises only).
           Warns about program usage BEFORE the destructive action; the delete is
           still effective right away, and every program reference is cleaned by
@@ -1392,6 +2054,9 @@ export const ExercisesPage: React.FC<ExercisesPageProps> = ({
         <div
           className="fixed inset-0 z-[70] bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center p-4"
           data-testid="exercise-delete-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-modal-title"
         >
           <div
             className="w-full max-w-md rounded-3xl bg-[#0d0d0d] border border-white/10 shadow-2xl p-5 sm:p-6 space-y-4"
@@ -1402,7 +2067,7 @@ export const ExercisesPage: React.FC<ExercisesPageProps> = ({
                 <ShieldAlert className="w-5 h-5 text-rose-400" />
               </div>
               <div className="min-w-0">
-                <h3 className="font-display font-bold text-white uppercase tracking-wide text-lg leading-tight">
+                <h3 id="delete-modal-title" className="font-display font-bold text-white uppercase tracking-wide text-lg leading-tight">
                   Supprimer {deleteTarget.name} ?
                 </h3>
                 <p className="text-xs text-zinc-400 mt-1">
@@ -1463,6 +2128,16 @@ export const ExercisesPage: React.FC<ExercisesPageProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* LOT E.1 — 1RM Calculator Modal */}
+      {oneRMModalOpen && oneRMModalExercise && (
+        <OneRMModal
+          isOpen={oneRMModalOpen}
+          onClose={() => setOneRMModalOpen(false)}
+          initialMode={oneRMModalMode}
+          onApplyWeight={handleOneRMApply}
+        />
       )}
     </div>
   );

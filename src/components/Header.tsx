@@ -9,12 +9,12 @@ interface HeaderProps {
   onOpenMobileMenu: () => void;
 }
 
-export const Header: React.FC<HeaderProps> = ({
+export const Header: React.FC<HeaderProps> = React.memo(function Header({
   profile,
   currentPage,
   onNavigate,
   onOpenMobileMenu,
-}) => {
+}) {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
 
   useEffect(() => {
@@ -59,10 +59,11 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Athletic Gamification HUD / Status Bar */}
         <div className="flex items-center gap-1.5 sm:gap-4 min-w-0">
-          {/* Day Streak */}
+          {/* Day Streak (desktop only — kept compact on mobile so the header
+              stays logo + level + menu; the streak lives on the home page) */}
           <div
             id="hud-streak"
-            className="hidden min-[400px]:flex items-center gap-1.5 bg-white/5 backdrop-blur-md border border-white/10 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-semibold text-amber-300 shadow-sm"
+            className="hidden md:flex items-center gap-1.5 bg-white/5 backdrop-blur-md border border-white/10 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-semibold text-amber-300 shadow-sm"
             title={`${profile.streakDays} jours consécutifs d'entraînement`}
           >
             <Flame className="w-4 h-4 text-amber-400 fill-amber-400 animate-pulse" />
@@ -70,10 +71,20 @@ export const Header: React.FC<HeaderProps> = ({
             <span className="hidden sm:inline text-zinc-400 text-[11px]">j. série</span>
           </div>
 
-          {/* Level & XP bar */}
+          {/* Level & XP bar — LOT 11: navigates to the progression page (the
+              logical destination for level/XP detail) instead of the stats page */}
           <div
             id="hud-level-xp"
-            onClick={() => onNavigate('statistiques')}
+            onClick={() => onNavigate('progression')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                onNavigate('progression');
+              }
+            }}
+            aria-label={`Niveau ${profile.level} - ${profile.currentXp}/${profile.nextLevelXp} XP. Voir ma progression.`}
             className="cursor-pointer flex items-center gap-1.5 sm:gap-2.5 bg-white/5 hover:bg-white/10 backdrop-blur-md border border-white/10 px-2 sm:px-3 py-1.5 rounded-xl transition-all"
             title={`Niveau ${profile.level} - ${profile.currentXp}/${profile.nextLevelXp} XP`}
           >
@@ -95,7 +106,9 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           </div>
 
-          {/* Offline / Online indicator */}
+          {/* Network / storage indicator — LOT 11 wording: the app is fully local,
+              so "online" states that data stays local, "offline" that nothing is
+              lost. Shown from sm up (the mobile header stays minimal). */}
           <div
             id="hud-network-status"
             className={`hidden sm:flex items-center gap-1.5 text-[11px] px-2.5 py-1.5 rounded-xl border font-medium backdrop-blur-md ${
@@ -103,17 +116,17 @@ export const Header: React.FC<HeaderProps> = ({
                 ? 'bg-emerald-950/40 text-emerald-300 border-emerald-500/30'
                 : 'bg-amber-950/40 text-amber-300 border-amber-500/30'
             }`}
-            title={isOnline ? 'En ligne (données stockées localement en IndexedDB)' : 'Mode 100% Hors Ligne actif'}
+            title={isOnline ? 'En ligne — vos données restent stockées localement (IndexedDB)' : 'Aucune connexion — vos données restent disponibles localement'}
           >
             {isOnline ? (
               <>
                 <Wifi className="w-3 h-3 text-emerald-400" />
-                <span className="hidden lg:inline">Local DB</span>
+                <span className="hidden min-[520px]:inline">Données locales</span>
               </>
             ) : (
               <>
                 <WifiOff className="w-3 h-3 text-amber-400" />
-                <span>Hors ligne</span>
+                <span className="hidden min-[520px]:inline">Mode hors ligne</span>
               </>
             )}
           </div>
@@ -122,7 +135,7 @@ export const Header: React.FC<HeaderProps> = ({
           <button
             id="btn-open-mobile-menu"
             onClick={onOpenMobileMenu}
-            className="md:hidden p-2 rounded-xl bg-white/5 backdrop-blur-md text-zinc-200 border border-white/10 hover:bg-white/10 transition-colors"
+            className="md:hidden w-11 h-11 flex items-center justify-center rounded-xl bg-white/5 backdrop-blur-md text-zinc-200 border border-white/10 hover:bg-white/10 transition-colors shrink-0"
             aria-label="Ouvrir le menu de navigation"
           >
             <Menu className="w-5 h-5 text-violet-300" />
@@ -131,4 +144,4 @@ export const Header: React.FC<HeaderProps> = ({
       </div>
     </header>
   );
-};
+});

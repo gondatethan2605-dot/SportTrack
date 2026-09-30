@@ -31,10 +31,10 @@ for (const m of QUICK_SESSION_PRESETS) {
     const { day, title } = buildQuickSessionPlan(m);
     assert.equal(day.name, `Séance rapide — ${m} min`);
     assert.equal(title, day.name);
-    assert.ok(day.exercises.length > 0);
-    assert.ok(day.exercises.length <= { 10: 3, 20: 4, 30: 5 }[m]);
-    assert.equal(day.exerciseIds.length, day.exercises.length);
-    assert.ok(day.stretches.length > 0);
+    assert.ok(day.exercises!.length > 0);
+    assert.ok(day.exercises!.length <= { 10: 3, 20: 4, 30: 5 }[m]);
+    assert.equal(day.exerciseIds.length, day.exercises!.length);
+    assert.ok(day.stretches!.length > 0);
     assert.ok(day.notes);
   });
 
@@ -48,12 +48,12 @@ for (const m of QUICK_SESSION_PRESETS) {
 
 ok('every cfg has a working reps/timer shape (dimension preserved)', () => {
   for (const m of QUICK_SESSION_PRESETS) {
-    for (const cfg of buildQuickSessionPlan(m).day.exercises) {
+    for (const cfg of buildQuickSessionPlan(m).day.exercises!) {
       if (cfg.mode === 'reps') {
         assert.equal(Number(cfg.reps) > 0, true, `reps cfg ${cfg.exerciseId}`);
         assert.equal(cfg.durationSec, 0, `timer fields cleared for ${cfg.exerciseId}`);
       } else {
-        assert.equal(cfg.durationSec > 0, true, `timer cfg ${cfg.exerciseId}`);
+        assert.equal((cfg.durationSec ?? 0) > 0, true, `timer cfg ${cfg.exerciseId}`);
         assert.equal(Number(cfg.reps), 0, `reps cleared for ${cfg.exerciseId}`);
       }
     }
@@ -68,14 +68,14 @@ ok('default muscle groups per duration are applied', () => {
 ok('absence de données: structured output never NaN/Infinity', () => {
   for (const m of QUICK_SESSION_PRESETS) {
     const day = buildQuickSessionPlan(m).day;
-    assert.ok(Number.isFinite(day.exercises.length));
-    for (const cfg of day.exercises) {
+    assert.ok(Number.isFinite(day.exercises!.length));
+    for (const cfg of day.exercises!) {
       assert.ok(Number.isFinite(Number(cfg.sets)), `sets finite ${cfg.exerciseId}`);
       assert.ok(Number.isFinite(Number(cfg.restSec)), `restSec finite ${cfg.exerciseId}`);
       if (cfg.mode === 'reps') assert.ok(Number.isFinite(Number(cfg.reps)), `reps finite ${cfg.exerciseId}`);
       else assert.ok(Number.isFinite(cfg.durationSec), `duration finite ${cfg.exerciseId}`);
     }
-    for (const s of day.stretches) {
+    for (const s of day.stretches!) {
       assert.ok(Number.isFinite(s.durationSec), `stretch finite ${s.id}`);
     }
   }
@@ -83,10 +83,10 @@ ok('absence de données: structured output never NaN/Infinity', () => {
 
 ok('stable shape: config ids unique and day id prefixed quick-', () => {
   const { day } = buildQuickSessionPlan(20);
-  const ids = day.exercises.map((c) => c.id);
+  const ids = day.exercises!.map((c) => c.id);
   assert.equal(new Set(ids).size, ids.length, 'unique ids');
   assert.equal(day.id.startsWith('quick-'), true);
-  for (const c of day.exercises) {
+  for (const c of day.exercises!) {
     assert.equal(c.id.startsWith('quick-'), true);
   }
 });

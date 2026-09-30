@@ -54,13 +54,9 @@ function goal(partial: Partial<Goal> & { direction: 'gain' | 'perte'; initialVal
     id: 'g1',
     title: 'Test',
     category: 'custom',
-    targetValue: 0,
-    currentValue: 0,
     unit: '',
     completed: false,
     createdAt: todayStr(),
-    direction: 'gain',
-    initialValue: 0,
     ...partial,
   };
 }

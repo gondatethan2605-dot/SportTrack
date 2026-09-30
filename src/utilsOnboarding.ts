@@ -47,11 +47,11 @@ function safeSet(key: string, value: string): void {
   }
 }
 
-function isGoal(value: string | null): value is OnboardingGoal {
+function isGoal(value: string | null | undefined): value is OnboardingGoal {
   return !!value && GOALS.some((g) => g.id === value);
 }
 
-function isMode(value: string | null): value is OnboardingMode {
+function isMode(value: string | null | undefined): value is OnboardingMode {
   return !!value && MODES.some((m) => m.id === value);
 }
 

@@ -107,8 +107,8 @@ ok('1c. modes & accents supportés (listes pures)', () => {
 
 ok('1d. blocs du dashboard : 9 blocs ordonnés + labels', () => {
   assert.deepEqual([...DASHBOARD_BLOCK_KEYS], [
-    'streak', 'level', 'volume', 'weekly', 'badges', 'stats',
-    'recommendation', 'next-session', 'records',
+    'next-session', 'recommendation', 'weekly', 'stats',
+    'streak', 'level', 'volume', 'badges', 'records',
   ]);
   assert.equal(DASHBOARD_BLOCK_KEYS.length, 9);
   for (const key of DASHBOARD_BLOCK_KEYS) {

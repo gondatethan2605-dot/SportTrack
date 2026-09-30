@@ -411,6 +411,7 @@ export interface ProgressionRecommendation {
   unit: string;
   trend: ProgressionTrend;
   last: number; // last recorded value (same unit as target)
+  previous: number | null; // value of the immediately previous comparable session
   best: number | null; // best comparable value
   target: number; // recommended next objective (>= last)
   reason: string; // short, human-readable French explanation
@@ -447,6 +448,7 @@ export function suggestNextTarget(entries: ExercisePerformance[], exerciseId: st
       unit,
       trend: 'insufficient',
       last,
+      previous: null,
       best,
       target: roundMetric(metric, last),
       reason:
@@ -476,7 +478,7 @@ export function suggestNextTarget(entries: ExercisePerformance[], exerciseId: st
     reason = 'Bonne dynamique. On propose une progression raisonnable au-delà de la dernière performance.';
   }
 
-  return { metric, unit, trend, last, best, target, reason };
+  return { metric, unit, trend, last, previous: prev, best, target, reason };
 }
 
 // Recompute bests for every exercise represented in the given performances.

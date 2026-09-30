@@ -1,14 +1,18 @@
 import assert from 'node:assert/strict';
 import {
+  adjustRestSeconds,
   buildExerciseSteps,
+  buildStretchSteps,
   DEFAULT_REST_SEC,
   DEFAULT_TRANSITION_REST_SEC,
   estimatedGuidedDurationSec,
   resolveGuidedRestSec,
   resolveRestSec,
+  resolveStretchRestSec,
   resolveTransitionRestSec,
 } from '../src/components/workout/workoutGuidedEngine';
-import { SessionExerciseLog } from '../src/types';
+import { SessionExerciseLog, StretchItem } from '../src/types';
+import { CORE_STRETCHES, LOWER_BODY_STRETCHES } from '../src/data/stretchesData';
 
 let passed = 0;
 let failed = 0;
@@ -351,6 +355,107 @@ ok('R6. durée estimée: restSec INDIVIDUEL à chaque exercice (20 puis 60)', ()
   const a = makeEx('ex-a', 'A', 2, 20, 30);
   const b = makeEx('ex-b', 'B', 2, 60, 30);
   assert.equal(estimatedGuidedDurationSec([a, b], [], 30, 30), 180 + 20 + 60 + 30);
+});
+
+// --- Repos entre étirements (LOT 10.2) --------------------------------------
+
+function mkStretch(id: string, durationSec: number, hasSides?: boolean): StretchItem {
+  return { id, name: id, targetArea: 'Jambes', durationSec, hasSides, instruction: 'Tiens la position.' };
+}
+
+ok('S1. resolveStretchRestSec: paramètre global de transition respecté, 30 s par défaut', () => {
+  assert.equal(resolveStretchRestSec(45), 45);
+  assert.equal(resolveStretchRestSec(120), 120);
+  assert.equal(resolveStretchRestSec(undefined), DEFAULT_TRANSITION_REST_SEC);
+  assert.equal(resolveStretchRestSec(Number.NaN), DEFAULT_TRANSITION_REST_SEC);
+  assert.equal(resolveStretchRestSec(Number.POSITIVE_INFINITY), DEFAULT_TRANSITION_REST_SEC);
+  assert.equal(resolveStretchRestSec(-10), DEFAULT_TRANSITION_REST_SEC);
+});
+
+ok('S2. durée estimée: repos après CHAQUE étirement (côtés inclus) sauf le dernier', () => {
+  // s1 (2 côtés 20s), s2 (10s), s3 (10s) ; étapes s1-1, s1-2, s2-1, s3-1.
+  // Repos entre chaque paire d'étapes consécutives : 3 repos de 45 s (global).
+  const s1 = mkStretch('s1', 20, true);
+  const s2 = mkStretch('s2', 10, false);
+  const s3 = mkStretch('s3', 10, false);
+  assert.equal(estimatedGuidedDurationSec([], [s1, s2, s3], 30, 45), 20 + 20 + 10 + 10 + 45 * 3);
+  // Un seul étirement à 2 côtés : repos entre le côté droit et le côté gauche.
+  assert.equal(estimatedGuidedDurationSec([], [s1], 30, 45), 40 + 45);
+  // Aucun étirement : estimé inchangé (0).
+  assert.equal(estimatedGuidedDurationSec([], [], 30, 45), 0);
+});
+
+ok('S3. durée estimée: pas de repos entre le dernier exercice et le 1er étirement', () => {
+  const a = makeEx('ex-a', 'A', 1, 30, 60);
+  const s1 = mkStretch('s1', 10, false);
+  // A : 45 s ; dernier exercice -> 1er étirement sans repos (comportement actuel) ; étirement 10 s => 55.
+  assert.equal(estimatedGuidedDurationSec([a], [s1], 30, 45), 55);
+});
+
+ok('S4. durée estimée: dernier étirement → AUCUN repos inutile avant le résumé', () => {
+  // s1 puis s2 : un seul repos entre les deux ; aucun repos après s2.
+  const s1 = mkStretch('s1', 20, false);
+  const s2 = mkStretch('s2', 10, false);
+  assert.equal(estimatedGuidedDurationSec([], [s1, s2], 30, 45), 20 + 10 + 45);
+});
+
+ok('S5. durée estimée: deux occurrences consécutives du MÊME étirement → repos entre chacune', () => {
+  // Occurrences identiques consécutives dans la séquence (1 côté chacune) :
+  // le nom / exerciseId identique ne supprime PAS le repos.
+  const a1 = mkStretch('st-quad', 20, false);
+  const a2 = mkStretch('st-quad', 20, false);
+  const b = mkStretch('st-ham', 10, false);
+  // étapes : quad, quad, ham → repos entre quad1→quad2 ET quad2→ham ; rien après ham.
+  assert.equal(estimatedGuidedDurationSec([], [a1, a2, b], 30, 45), 20 + 20 + 10 + 45 * 2);
+});
+
+ok('S6. durée estimée: A côté droit → A côté gauche → repos entre les côtés', () => {
+  // Le changement de côté compte comme un nouvel étirement.
+  const s1 = mkStretch('st-quad', 30, true);
+  assert.equal(estimatedGuidedDurationSec([], [s1], 30, 30), 30 + 30 + 30);
+});
+
+ok('S7. programme réel Core : repos entre CHAQUE étirement (aucun après le dernier)', () => {
+  const steps = buildStretchSteps(CORE_STRETCHES);
+  const rests = steps.length - 1;
+  const dur = CORE_STRETCHES.reduce((a, s) => a + s.durationSec * (s.hasSides ? 2 : 1), 0);
+  assert.equal(estimatedGuidedDurationSec([], CORE_STRETCHES, 30, 45), dur + rests * 45);
+});
+
+ok('S8. programme réel Lower : repos entre CHAQUE étirement (aucun après le dernier)', () => {
+  const steps = buildStretchSteps(LOWER_BODY_STRETCHES);
+  const rests = steps.length - 1;
+  const dur = LOWER_BODY_STRETCHES.reduce((a, s) => a + s.durationSec * (s.hasSides ? 2 : 1), 0);
+  assert.equal(estimatedGuidedDurationSec([], LOWER_BODY_STRETCHES, 30, 45), dur + rests * 45);
+});
+
+ok('S9. programme Mobility (Dimanche) : sans étirements → estimation inchangée (0)', () => {
+  assert.equal(estimatedGuidedDurationSec([], [], 30, 45), 0);
+});
+
+ok('B1. +15s ajoute EXACTEMENT 15s par clic (15→30→45→60→75, aucun double traitement)', () => {
+  let v = 15;
+  for (const expected of [30, 45, 60, 75]) {
+    v = adjustRestSeconds(v, 15);
+    assert.equal(v, expected);
+  }
+});
+
+ok('B2. -15s retire EXACTEMENT 15s par clic (75→60→45→30→15)', () => {
+  let v = 75;
+  for (const expected of [60, 45, 30, 15]) {
+    v = adjustRestSeconds(v, -15);
+    assert.equal(v, expected);
+  }
+});
+
+ok('B3. ajustement borné ≥ 0 (jamais négatif ; 0 = le repos se termine)', () => {
+  assert.equal(adjustRestSeconds(15, -15), 0);
+  assert.equal(adjustRestSeconds(5, -15), 0);
+  assert.equal(adjustRestSeconds(0, -15), 0);
+  assert.equal(adjustRestSeconds(30, 15), 45);
+  assert.equal(adjustRestSeconds(Number.NaN, 15), 15);
+  assert.equal(adjustRestSeconds(undefined as unknown as number, 15), 15);
 });
 
 console.log(`\n===== RÉSUMÉ =====`);

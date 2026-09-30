@@ -28,7 +28,7 @@ ok('Vendredi présent', dayNames.includes('Vendredi'));
 ok('Samedi présent', dayNames.includes('Samedi'));
 ok('Dimanche présent', dayNames.includes('Dimanche'));
 ok('7 jours', MY_PROGRAM.days.length === 7);
-ok('daysPerWeek=6', MY_PROGRAM.daysPerWeek === 6);
+ok('daysPerWeek=7', MY_PROGRAM.daysPerWeek === 7);
 
 // day order
 const order = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'];
@@ -61,8 +61,8 @@ checkDay('Lundi', [
   ['Montées de genoux sur place', 1, 30, 15, 'timer'],
   ['Relevé de bassin', 4, 15, 30, 'reps'],
   ['Battements de jambes', 4, 50, 30, 'timer'],
-  ['Ciseaux', 4, 50, 30, 'timer'],
-  ['Étoile de mer (crunch latéral)', 4, 15, 30, 'reps'],
+['Ciseaux', 4, 50, 30, 'timer'],
+  ['Crunch oblique', 4, 15, 30, 'reps'],
   ['Russian twist sans poids', 4, 20, 30, 'reps'],
   ['Planche', 4, 45, 30, 'timer'],
 ]);
@@ -111,7 +111,7 @@ ok('Glute-ham raise ajouté UNE seule fois dans la bibliothèque', initialExerci
 checkDay('Dimanche', [
   ['Pression isométrique contre le mur (coude collé au corps)', 3, 8, 20, 'reps'],
   ['Serré d’omoplates', 3, 12, 15, 'reps'],
-  ['90-90 / Gobelet de hanche', 2, 8, 20, 'reps'],
+  ['Gobelet de hanche / 90-90', 2, 8, 20, 'reps'],
   ['Pont fessier une jambe', 3, 12, 20, 'reps'],
   ['Jefferson Curl à vide', 3, 8, 20, 'reps'],
   ['Step-down contrôlé', 3, 10, 20, 'reps'],
@@ -122,8 +122,31 @@ checkDay('Dimanche', [
   ['Pronation / supination', 2, 12, 15, 'reps'],
   ['Alphabet avec le pied', 1, 26, 15, 'reps'],
   ['Marche talons / pointes', 2, 20, 20, 'reps'],
-  ['Équilibre sur une jambe', 3, 20, 15, 'timer'],
+['Équilibre sur une jambe', 3, 20, 15, 'timer'],
 ]);
+
+// 4b. Transition rests come from the document (repos column) — the rest AFTER
+// each exercise, and 0 for the last exercise of each day (no fabricated rest
+// before the stretch phase, which is handled by the guided-mode stretch rests).
+const CORE_TRANS = [15, 30, 30, 30, 30, 30, 0];
+const LOWER_TRANS = [15, 30, 30, 30, 20, 30, 0];
+const MOB_TRANS = [20, 15, 20, 20, 20, 20, 15, 30, 20, 15, 15, 15, 20, 0];
+['Lundi', 'Mercredi', 'Vendredi'].forEach((d0) => {
+  const trans = day(d0).exercises!.map((c) => c.transitionRestSec ?? 0);
+  ok(`${d0}: repos transition core`, JSON.stringify(trans) === JSON.stringify(CORE_TRANS));
+});
+['Mardi', 'Jeudi', 'Samedi'].forEach((d0) => {
+  const trans = day(d0).exercises!.map((c) => c.transitionRestSec ?? 0);
+  ok(`${d0}: repos transition jambes`, JSON.stringify(trans) === JSON.stringify(LOWER_TRANS));
+});
+{
+  const trans = day('Dimanche').exercises!.map((c) => c.transitionRestSec ?? 0);
+  ok('Dimanche: repos transition mobilité', JSON.stringify(trans) === JSON.stringify(MOB_TRANS));
+}
+['Lundi', 'Mardi', 'Dimanche'].forEach((d0) => {
+  const last = day(d0).exercises![day(d0).exercises!.length - 1];
+  ok(`${d0}: transition 0 après dernier exercice`, (last.transitionRestSec ?? 0) === 0);
+});
 
 // 5. NO Y-T-W-L in the program
 const allNames = MY_PROGRAM.days.flatMap((d) => (d.exercises || []).map((c) => c.exerciseName.toLowerCase()));
@@ -149,6 +172,8 @@ for (const d of MY_PROGRAM.days) {
 const libNames = initialExercises.map((e: { name: string }) => e.name.toLowerCase());
 ok('ex-high-knees ajouté une seule fois', initialExercises.filter((e: { id: string }) => e.id === 'ex-high-knees').length === 1);
 ok('ex-starfish-crunch ajouté une seule fois', initialExercises.filter((e: { id: string }) => e.id === 'ex-starfish-crunch').length === 1);
+ok('ex-oblique-crunch ajouté une seule fois', initialExercises.filter((e: { id: string }) => e.id === 'ex-oblique-crunch').length === 1);
+ok('Crunch oblique dans la bibliothèque', initialExercises.some((e: { name: string }) => e.name === 'Crunch oblique'));
 ok('pas de nom en double étoile', libNames.filter((n: string) => n.includes('étoile de mer')).length === 1);
 ok('pas de nom en double montées de genoux', libNames.filter((n: string) => n.includes('montées de genoux')).length === 1);
 

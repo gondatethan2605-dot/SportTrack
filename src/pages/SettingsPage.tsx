@@ -11,6 +11,7 @@ import {
   DASHBOARD_BLOCK_KEYS,
   DASHBOARD_BLOCK_LABELS,
   DEFAULT_DASHBOARD_BLOCKS,
+  type DashboardBlockKey,
 } from '../utilsSettings';
 import {
   Settings,
@@ -530,13 +531,13 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
               className="flex items-center justify-between gap-2 p-3 rounded-2xl bg-white/5 border border-white/10"
             >
               <span className="text-sm font-semibold text-zinc-200 truncate">
-                {DASHBOARD_BLOCK_LABELS[key] ?? key}
+                {DASHBOARD_BLOCK_LABELS[key as DashboardBlockKey] ?? key}
               </span>
               <div className="flex items-center gap-1.5 shrink-0">
                 <button
                   type="button"
                   data-testid={`settings-dashboard-${key}-up`}
-                  aria-label={`Déplacer le bloc ${DASHBOARD_BLOCK_LABELS[key] ?? key} vers le haut`}
+                  aria-label={`Déplacer le bloc ${DASHBOARD_BLOCK_LABELS[key as DashboardBlockKey] ?? key} vers le haut`}
                   disabled={index === 0}
                   onClick={() => {
                     if (index === 0) return;
@@ -551,7 +552,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                 <button
                   type="button"
                   data-testid={`settings-dashboard-${key}-down`}
-                  aria-label={`Déplacer le bloc ${DASHBOARD_BLOCK_LABELS[key] ?? key} vers le bas`}
+                  aria-label={`Déplacer le bloc ${DASHBOARD_BLOCK_LABELS[key as DashboardBlockKey] ?? key} vers le bas`}
                   disabled={index === settings.dashboardBlocks.length - 1}
                   onClick={() => {
                     if (index >= settings.dashboardBlocks.length - 1) return;
@@ -566,7 +567,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                 <button
                   type="button"
                   data-testid={`settings-dashboard-${key}-hide`}
-                  aria-label={`Masquer le bloc ${DASHBOARD_BLOCK_LABELS[key] ?? key}`}
+                  aria-label={`Masquer le bloc ${DASHBOARD_BLOCK_LABELS[key as DashboardBlockKey] ?? key}`}
                   onClick={() => applySettings({ dashboardBlocks: settings.dashboardBlocks.filter((b) => b !== key) })}
                   className="flex items-center gap-1.5 px-2.5 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-300 text-xs font-bold"
                 >

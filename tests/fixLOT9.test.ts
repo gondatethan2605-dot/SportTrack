@@ -22,8 +22,8 @@ function ok(name: string, fn: () => void) {
 // exactly as pinned by settings.test.ts (LOT 6 behaviour preserved). ---
 ok('9.2 blocks: pinned order kept (9 keys, labels each)', () => {
   assert.deepEqual([...DASHBOARD_BLOCK_KEYS], [
-    'streak', 'level', 'volume', 'weekly', 'badges', 'stats',
-    'recommendation', 'next-session', 'records',
+    'next-session', 'recommendation', 'weekly', 'stats',
+    'streak', 'level', 'volume', 'badges', 'records',
   ]);
   assert.equal(DASHBOARD_BLOCK_KEYS.length, 9);
   assert.deepEqual([...DEFAULT_DASHBOARD_BLOCKS], [...DASHBOARD_BLOCK_KEYS]);
@@ -78,7 +78,7 @@ ok('9.8 quick session: exports exist, shaped for a synthetic day', async () => {
   assert.deepEqual([...u.QUICK_SESSION_PRESETS], [10, 20, 30]);
   const { day } = u.buildQuickSessionPlan(20);
   assert.equal(day.id.startsWith('quick-'), true, 'day is explicitly synthetic');
-  assert.ok(day.exercises.length > 0);
+  assert.ok(day.exercises!.length > 0);
 });
 
 console.log(`\n${passed} tests PASS, ${failed} FAIL`);

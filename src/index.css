@@ -57,10 +57,13 @@
 }
 
 /* Frosted Glass Cards & Elements */
+/* LOT 13: blur radii reduced + tiered for small screens. backdrop-filter on
+   hundreds of stacked cards is the dominant compositing cost on mobile; the
+   frosted look is retained (dark backdrop makes 14px vs 20px imperceptible). */
 .sport-card {
   background: var(--card-fill);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
   border: 1px solid var(--card-border);
   border-radius: 1.5rem;
   transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
@@ -71,25 +74,39 @@
   background: var(--card-fill-hover);
 }
 
+@media (max-width: 640px) {
+  .sport-card {
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+  }
+}
+
 .sport-card-active {
   background: rgb(var(--accent-rgb) / 0.12);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   border: 1px solid rgb(var(--accent-rgb) / 0.35);
   border-radius: 1.5rem;
 }
 
+@media (max-width: 640px) {
+  .sport-card-active {
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+  }
+}
+
 .glass-pill {
   background: var(--glass-fill);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   border: 1px solid var(--glass-border);
 }
 
 .glass-input {
   background: var(--input-fill) !important;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   border: 1px solid var(--glass-border) !important;
   color: var(--input-text) !important;
 }
@@ -198,6 +215,28 @@
   ) {
     animation: none !important;
     transition: none !important;
+  }
+}
+
+/* ===== LOT 13 — Ambient background orbs (GPU cost) =====
+   These fixed, static glows are the most expensive compositing layer in the
+   app: a gaussian blur proportional to their (huge) painted area, re-composited
+   on every scroll/repaint. Promoting them to a dedicated layer lets the
+   compositor cache the filtered bitmap; hiding them for reduced-motion /
+   animations-off users removes the per-frame cost entirely. The default
+   violet/indigo identity is untouched. */
+.ambient-orb {
+  will-change: transform;
+  transform: translateZ(0);
+}
+
+[data-animations="off"] .ambient-orb {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ambient-orb {
+    display: none;
   }
 }
 
@@ -392,4 +431,68 @@ main {
 
 /* Decorative blobs inside the hero are white glass; on light they become dark
    ink via --color-white and stay tasteful. Nothing to fix here. */
+
+/* =====================================================================
+   REFONTE MOBILE — mobile-first UX polish (Desktop 1440 is untouched: every
+   rule below is either `@media (max-width: …)` scoped, purely additive, or
+   relies on env() returning 0px on desktop).
+   ===================================================================== */
+
+/* No horizontal page pan on phones (scrollable rows use inner overflow).
+   Scoped to mobile to keep Desktop 1440 rendering untouched. */
+@media (max-width: 767px) {
+  html, body {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+}
+
+/* Phone taps must not zoom nor trigger accidental text selection on buttons. */
+@supports (touch-action: manipulation) {
+  button, a, [role="button"], input[type="radio"], input[type="checkbox"] {
+    touch-action: manipulation;
+  }
+}
+
+/* Guaranteed 44px-class touch targets: mobile bottom nav + mobile header. */
+#mobile-bottom-nav button {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+@media (max-width: 640px) {
+  /* Numeric inputs (guided session weight) get a full-size touch target. */
+  input[type="number"] {
+    min-height: 44px;
+  }
+
+  /* Library filter chips (Tous/Exercices/Étirements/Perso/Favoris + muscles)
+     get a comfortable tap height on phones. */
+  button[data-testid^="exercise-filter"] {
+    min-height: 40px;
+  }
+
+  /* Every modal overlay (fixed + Tailwind z-*): the inner sport-card content
+     becomes a scrollable sheet on short / small viewports instead of being
+     clipped. dvh honours the dynamic browser chrome, with a vh fallback. */
+  div.fixed[class*="z-["] > .sport-card {
+    max-height: min(88dvh, 88vh);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+}
+
+/* Mobile drawer: clear the home indicator / bottom inset. */
+#mobile-drawer {
+  padding-top: calc(env(safe-area-inset-top, 0px));
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 1rem);
+}
+
+/* One clear, theme-aware keyboard focus indicator on every interactive area. */
+:focus-visible {
+  outline: 2px solid rgb(var(--accent-rgb) / 0.8);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
 

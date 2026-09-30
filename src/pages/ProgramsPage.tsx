@@ -25,6 +25,17 @@ import {
 import { getWorkoutSettings } from '../utilsSettings';
 import { validateProgramConsistency, validateDay } from '../utilsProgramConsistency';
 import {
+  buildExerciseSwapSuggestions,
+  getExerciseNaturalMode,
+  moveProgramExerciseToDay,
+  renameProgramDay,
+  replaceProgramExercise,
+  validateProgramData,
+  ExerciseModeChoice,
+  ExerciseReplaceOutcome,
+  ProgramValidationIssue,
+} from '../utilsProgramSwap';
+import {
   Layers,
   Play,
   Plus,
@@ -53,7 +64,15 @@ import {
   Repeat,
   Palette,
   MoveRight,
+  ArrowLeftRight,
+  Pencil,
+  Lightbulb,
+  ShieldAlert,
+  RotateCcw,
+  AlertCircle,
+  Calculator,
 } from 'lucide-react';
+import { OneRMModal } from '../components/OneRMModal';
 
 interface ProgramsPageProps {
   programs: WorkoutProgram[];
@@ -127,6 +146,243 @@ export const ProgramsPage: React.FC<ProgramsPageProps> = ({
   const [moveFromDayId, setMoveFromDayId] = useState<string | null>(null);
   const [moveFromCfgId, setMoveFromCfgId] = useState<string | null>(null);
   const [moveToDayId, setMoveToDayId] = useState<string>('');
+
+  // LOT D — exercise replacement (real UI wired to the pure utilsProgramSwap core)
+  const [replaceCfgIndex, setReplaceCfgIndex] = useState<number | null>(null);
+  const [replaceSearch, setReplaceSearch] = useState('');
+  const [replacePending, setReplacePending] = useState<Exercise | null>(null);
+  const [replaceOutcome, setReplaceOutcome] = useState<ExerciseReplaceOutcome | null>(null);
+
+  // LOT E.1 — 1RM Calculator Modal
+  const [oneRMModalOpen, setOneRMModalOpen] = useState(false);
+  const [oneRMModalExercise, setOneRMModalExercise] = useState<Exercise | null>(null);
+  const [oneRMModalMode, setOneRMModalMode] = useState<'estimate' | 'percentage' | 'plates'>('estimate');
+  const [oneRMModalConfig, setOneRMModalConfig] = useState<ProgramExerciseConfig | null>(null);
+
+// F.1-B — Gestion de groupes superset/circuit (UI de configuration uniquement).
+  // Ces états sont indépendants de la session en cours ; ils opèrent sur
+  // day.groups / day.exercises tels quels, sans toucher WorkoutSession, sans
+  // IndexedDB, sans DB_VERSION.
+
+  // État ouvert/fermé du modal de création/édition de groupe
+  const [isGroupModalOpen, setIsGroupModalOpen] = useState(false);
+  // Groupe en cours d'édition (null = création neuve)
+  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
+  // Type du groupe en cours : 'superset' | 'circuit'
+  const [newGroupType, setNewGroupType] = useState<'superset' | 'circuit'>('superset');
+  // IDs d'exercices sélectionnés pour la création d'un nouveau groupe
+  const [groupSelectedExerciseIds, setGroupSelectedExerciseIds] = useState<string[]>([]);
+  // Paramètres du groupe en cours d'édition
+  const [editingGroupRounds, setEditingGroupRounds] = useState(1);
+  const [editingGroupRestBetweenExercises, setEditingGroupRestBetweenExercises] = useState(0);
+  const [editingGroupRestBetweenRounds, setEditingGroupRestBetweenRounds] = useState(60);
+
+  // Filtre/mémo par programme pour éviter les ré-open inutilels du modal
+  const [groupProgramId, setGroupProgramId] = useState<string | null>(null);
+
+  const handleOpenOneRMModal = (exercise: Exercise, config: ProgramExerciseConfig | null, initialMode: 'estimate' | 'percentage' | 'plates' = 'estimate') => {
+    setOneRMModalExercise(exercise);
+    setOneRMModalConfig(config);
+    setOneRMModalMode(initialMode);
+    setOneRMModalOpen(true);
+  };
+
+  const handleOneRMApply = (weightKg: number) => {
+    if (oneRMModalConfig && weightKg > 0) {
+      handleUpdateExerciseParam(
+        sessionExercises.findIndex((e) => e.id === oneRMModalConfig!.id),
+        'targetWeightKg',
+        weightKg
+      );
+    }
+    setOneRMModalOpen(false);
+    setOneRMModalConfig(null);
+  };
+
+  // F.1-B — Helpers de groupe (purs, sans mutation).
+
+  // Génère un groupId unique
+  const generateGroupId = (programId: string, dayId: string): string => {
+    return `group-${programId}-${dayId}-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+  };
+
+  // Ouvre le modal de création/édition de groupe pour un jour donné
+  const handleOpenGroupModal = (program: WorkoutProgram, day: WorkoutProgramDay) => {
+    setGroupProgramId(program.id);
+    const exerciseIds = day.exercises ? day.exercises.map((ex) => ex.exerciseId) : [];
+    setGroupSelectedExerciseIds(exerciseIds);
+    setIsGroupModalOpen(true);
+  };
+
+  // Ferme le modal de groupe
+  const handleCloseGroupModal = () => {
+    setIsGroupModalOpen(false);
+    setGroupProgramId(null);
+    setEditingGroupId(null);
+    setNewGroupType('superset');
+    setGroupSelectedExerciseIds([]);
+    setEditingGroupRounds(1);
+    setEditingGroupRestBetweenExercises(0);
+    setEditingGroupRestBetweenRounds(60);
+  };
+
+  // Crée un nouveau groupe avec les exercices sélectionnés
+  const handleCreateGroup = (program: WorkoutProgram, day: WorkoutProgramDay) => {
+    const exerciseIds = groupSelectedExerciseIds.filter(
+      (id) => day.exercises?.some((ex) => ex.exerciseId === id)
+    );
+    if (exerciseIds.length < 2) return;
+
+    // Trouver les configs d'exercices sélectionnés
+    const selectedConfigs = day.exercises?.filter((ex) =>
+      exerciseIds.includes(ex.exerciseId)
+    ) || [];
+
+    // Générer un groupId unique
+    const groupId = generateGroupId(program.id, day.id);
+
+    // Créer les nouveaux groupId/groupType pour chaque exercice sélectionné
+    const updatedExercises = day.exercises?.map((ex) => {
+      if (selectedConfigs.some((c) => c.id === ex.id)) {
+        return { ...ex, groupId, groupType: newGroupType };
+      }
+      return ex;
+    });
+
+    // Créer le groupe
+    const newGroup: ProgramExerciseGroup = {
+      id: groupId,
+      type: newGroupType,
+      rounds: editingGroupRounds,
+      restBetweenExercisesSec: editingGroupRestBetweenExercises,
+      restBetweenRoundsSec: editingGroupRestBetweenRounds,
+    };
+
+    // Mettre à jour day.groups
+    const updatedGroups = day.groups ? [...day.groups, newGroup] : [newGroup];
+
+    // Sauvegarder le programme
+    onSaveProgram({
+      ...program,
+      days: program.days.map((d) =>
+        d.id === day.id ? { ...d, exercises: updatedExercises, groups: updatedGroups } : d
+      ),
+    });
+
+    handleCloseGroupModal();
+  };
+
+  // Bascule un exercice dans/du groupe (ajoute ou retire)
+  const handleToggleExerciseInGroup = (
+    program: WorkoutProgram,
+    day: WorkoutProgramDay,
+    exerciseId: string
+  ) => {
+    const cfg = day.exercises?.find((c) => c.exerciseId === exerciseId);
+    if (!cfg) return;
+
+    if (cfg.groupId) {
+      // Retirer du groupe
+      const newExercises = day.exercises?.map((ex) =>
+        ex.exerciseId === exerciseId
+          ? { ...ex, groupId: undefined, groupType: undefined }
+          : ex
+      ) || [];
+      const newGroups = day.groups?.filter((g) => g.id !== cfg.groupId) || [];
+      onSaveProgram({
+        ...program,
+        days: program.days.map((d) =>
+          d.id === day.id ? { ...d, exercises: newExercises, groups: newGroups } : d
+        ),
+      });
+    } else {
+      // Ajouter au groupe (si on a déjà un groupe en cours)
+      // Pour l'instant, on sélectionne juste l'exercice dans le modal
+      const selected = groupSelectedExerciseIds.includes(exerciseId)
+        ? groupSelectedExerciseIds.filter((id) => id !== exerciseId)
+        : [...groupSelectedExerciseIds, exerciseId];
+      setGroupSelectedExerciseIds(selected);
+    }
+  };
+
+  // Dissout un groupe existant
+  const handleDeleteGroup = (
+    program: WorkoutProgram,
+    day: WorkoutProgramDay,
+    groupId: string
+  ) => {
+    const newExercises = day.exercises?.map((ex) =>
+      ex.groupId === groupId ? { ...ex, groupId: undefined, groupType: undefined } : ex
+    ) || [];
+    const newGroups = day.groups?.filter((g) => g.id !== groupId) || [];
+    onSaveProgram({
+      ...program,
+      days: program.days.map((d) =>
+        d.id === day.id ? { ...d, exercises: newExercises, groups: newGroups } : d
+      ),
+    });
+  };
+
+  // Change le type d'un groupe (superset <-> circuit)
+  const handleChangeGroupType = (
+    program: WorkoutProgram,
+    day: WorkoutProgramDay,
+    groupId: string,
+    newType: 'superset' | 'circuit'
+  ) => {
+    const newGroups = day.groups?.map((g) =>
+      g.id === groupId ? { ...g, type: newType } : g
+    ) || [];
+    onSaveProgram({
+      ...program,
+      days: program.days.map((d) =>
+        d.id === day.id ? { ...d, groups: newGroups } : d
+      ),
+    });
+  };
+
+  // Met à jour les paramètres d'un groupe
+  const handleUpdateGroupParams = (
+    program: WorkoutProgram,
+    day: WorkoutProgramDay,
+    groupId: string,
+    rounds?: number,
+    restBetweenExercisesSec?: number,
+    restBetweenRoundsSec?: number
+  ) => {
+    const newGroups = day.groups?.map((g) =>
+      g.id === groupId
+        ? { ...g, rounds: rounds ?? g.rounds, restBetweenExercisesSec: restBetweenExercisesSec ?? g.restBetweenExercisesSec, restBetweenRoundsSec: restBetweenRoundsSec ?? g.restBetweenRoundsSec }
+        : g
+    ) || [];
+    onSaveProgram({
+      ...program,
+      days: program.days.map((d) =>
+        d.id === day.id ? { ...d, groups: newGroups } : d
+      ),
+    });
+  };
+  const [renamingDayId, setRenamingDayId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [renameError, setRenameError] = useState('');
+
+  // LOT D — advisory coherence report. Computed ONCE for every rendered program
+  // (one memo, no hook inside the day map) and used for the per-day badge.
+  const programIssues = useMemo(() => {
+    const map = new Map<string, ProgramValidationIssue[]>();
+    for (const program of programs) {
+      const issues = validateProgramData(program, exercises);
+      if (issues.length > 0) map.set(program.id, issues);
+    }
+    return map;
+  }, [programs, exercises]);
+
+  const dayIssueCount = (programId: string, dayId: string): number =>
+    (programIssues.get(programId) || []).filter((issue) => issue.dayId === dayId).length;
+
+  // LOT D — Delete Program Confirmation Modal
+  const [isDeleteProgramModalOpen, setIsDeleteProgramModalOpen] = useState(false);
+  const [deleteProgramTarget, setDeleteProgramTarget] = useState<string | null>(null);
 
   const getExerciseObj = (id: string): Exercise | undefined => {
     return exercises.find((e) => e.id === id);
@@ -301,6 +557,125 @@ export const ProgramsPage: React.FC<ProgramsPageProps> = ({
     }
   };
 
+  // LOT D — inline day rename. Only `name` is written by the pure helper: the
+  // day id, dayOfWeek, muscleGroups, exercises, stretches and notes are
+  // preserved verbatim, and an empty name is rejected instead of erasing it.
+  const startDayRename = (day: WorkoutProgramDay) => {
+    setRenamingDayId(day.id);
+    setRenameValue(day.name || '');
+    setRenameError('');
+  };
+
+  const cancelDayRename = () => {
+    setRenamingDayId(null);
+    setRenameValue('');
+    setRenameError('');
+  };
+
+  const commitDayRename = (program: WorkoutProgram, dayId: string) => {
+    const result = renameProgramDay(program, dayId, renameValue);
+    if (!result.changed) {
+      setRenameError(result.error || 'Nom de séance invalide.');
+      return;
+    }
+    onSaveProgram(result.program);
+    cancelDayRename();
+  };
+
+  // LOT D — the editor state is projected back into a program so the pure core
+  // operates on exactly what the session form is about to persist.
+  const buildEditorProgram = (): WorkoutProgram | null => {
+    if (!currentProgramForSession || !editingSessionId) return null;
+    return {
+      ...currentProgramForSession,
+      days: currentProgramForSession.days.map((d) =>
+        d.id === editingSessionId
+          ? {
+              ...d,
+              exercises: sessionExercises,
+              exerciseIds: sessionExercises.map((c) => c.exerciseId),
+            }
+          : d
+      ),
+    };
+  };
+
+  const openReplacePanel = (index: number) => {
+    setReplaceCfgIndex(index);
+    setReplaceSearch('');
+    setReplacePending(null);
+  };
+
+  const closeReplacePanel = () => {
+    setReplaceCfgIndex(null);
+    setReplaceSearch('');
+    setReplacePending(null);
+  };
+
+  const applyExerciseReplacement = (next: Exercise, choice: ExerciseModeChoice) => {
+    const dayId = editingSessionId;
+    const cfg = replaceCfgIndex != null ? sessionExercises[replaceCfgIndex] : undefined;
+    const base = buildEditorProgram();
+    if (!dayId || !cfg || !base) return;
+    const result = replaceProgramExercise(base, dayId, cfg.id, next, choice);
+    if (!result.outcome) return;
+    const updatedDay = result.program.days.find((d) => d.id === dayId);
+    if (!updatedDay || !updatedDay.exercises) return;
+    setSessionExercises(updatedDay.exercises);
+    setReplaceOutcome(result.outcome);
+    setReplacePending(null);
+  };
+
+  // Compatible mode -> applied immediately with the full configuration kept.
+  // Incompatible mode -> NO automatic conversion: the explicit choice panel is
+  // shown first and nothing is written until the user picks.
+  const chooseReplacement = (candidate: Exercise) => {
+    const cfg = replaceCfgIndex != null ? sessionExercises[replaceCfgIndex] : undefined;
+    if (!cfg) return;
+    const currentMode = cfg.mode === 'timer' ? 'timer' : 'reps';
+    if (getExerciseNaturalMode(candidate) === currentMode) {
+      applyExerciseReplacement(candidate, 'keep');
+    } else {
+      setReplacePending(candidate);
+    }
+  };
+
+  const replaceConfig = replaceCfgIndex != null ? sessionExercises[replaceCfgIndex] : undefined;
+  const replaceCurrent = replaceConfig ? getExerciseObj(replaceConfig.exerciseId) : undefined;
+
+  // Suggestions ranked only from the metadata already stored on `Exercise`.
+  const replaceSuggestions = useMemo(() => {
+    if (!replaceConfig) return [];
+    return buildExerciseSwapSuggestions(replaceCurrent, replaceConfig, exercises, {
+      limit: 6,
+      dayExerciseIds: sessionExercises.map((c) => c.exerciseId),
+    });
+  }, [replaceConfig, replaceCurrent, exercises, sessionExercises]);
+
+  // Fallback: any other exercise of the library, searched by name/muscle.
+  const replaceLibraryResults = useMemo(() => {
+    if (replaceCfgIndex == null) return [];
+    const query = replaceSearch.trim().toLowerCase();
+    return exercises
+      .filter((ex) => ex.id !== replaceConfig?.exerciseId)
+      .filter(
+        (ex) =>
+          !query ||
+          ex.name.toLowerCase().includes(query) ||
+          ex.primaryMuscle.toLowerCase().includes(query)
+      )
+      .slice(0, 40);
+  }, [exercises, replaceSearch, replaceCfgIndex, replaceConfig]);
+
+  // LOT D — Delete Program Confirmation
+  const handleConfirmDeleteProgram = () => {
+    if (deleteProgramTarget && onDeleteProgram) {
+      onDeleteProgram(deleteProgramTarget);
+    }
+    setIsDeleteProgramModalOpen(false);
+    setDeleteProgramTarget(null);
+  };
+
   // Reorder a day within the program (up / down). Only the ordered array of
   // days is modified; day content and ids are preserved verbatim.
   const handleMoveDay = (program: WorkoutProgram, dayId: string, direction: 'up' | 'down') => {
@@ -320,42 +695,21 @@ export const ProgramsPage: React.FC<ProgramsPageProps> = ({
   // same program. The configuration (sets, reps/timer plans, weight, rest,
   // notes) is carried over untouched; the source day's exerciseIds fallback is
   // also kept in sync so legacy consumers stay coherent.
+  // Move an exercise (with its full config) from one day to another within the
+  // same program. Delegates to the pure helper so the exact persisted result is
+  // unit tested (full config carried over, exerciseIds re-synced on both days,
+  // and a legacy target day materialized instead of losing its ids).
   const handleMoveExerciseToDay = (program: WorkoutProgram) => {
-    const fromDay = program.days.find((d) => d.id === moveFromDayId);
-    const toDay = program.days.find((d) => d.id === moveToDayId);
-    if (!fromDay || !toDay || !moveFromCfgId || fromDay.id === toDay.id) {
-      resetMoveState();
-      return;
+    const result = moveProgramExerciseToDay(
+      program,
+      moveFromDayId || '',
+      moveToDayId,
+      moveFromCfgId || '',
+      exercises
+    );
+    if (result.changed) {
+      onSaveProgram(result.program);
     }
-    const cfgIndex = (fromDay.exercises || []).findIndex((c) => c.id === moveFromCfgId);
-    if (cfgIndex < 0 || cfgIndex === -1) {
-      resetMoveState();
-      return;
-    }
-    const movedCfg = { ...fromDay.exercises![cfgIndex] };
-
-    const updatedFromExercises = (fromDay.exercises || []).filter((c) => c.id !== moveFromCfgId);
-    const updatedToExercises = [...(toDay.exercises || []), movedCfg];
-
-    const updatedDays = program.days.map((d) => {
-      if (d.id === fromDay.id) {
-        return {
-          ...d,
-          exercises: updatedFromExercises,
-          exerciseIds: updatedFromExercises.map((c) => c.exerciseId),
-        };
-      }
-      if (d.id === toDay.id) {
-        return {
-          ...d,
-          exercises: updatedToExercises,
-          exerciseIds: updatedToExercises.map((c) => c.exerciseId),
-        };
-      }
-      return d;
-    });
-
-    onSaveProgram({ ...program, days: updatedDays });
     resetMoveState();
   };
 
@@ -813,7 +1167,7 @@ export const ProgramsPage: React.FC<ProgramsPageProps> = ({
                   {/* Sessions Cards Grid */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {program.days.map((day, idx) => {
-                      const exerciseConfigs =
+                      const exerciseConfigs: ProgramExerciseConfig[] =
                         day.exercises && day.exercises.length > 0
                           ? day.exercises
                           : day.exerciseIds.map((id) => ({
@@ -855,6 +1209,27 @@ export const ProgramsPage: React.FC<ProgramsPageProps> = ({
                                 <h4 className="font-bold text-base text-white mt-1.5">
                                   {day.name}
                                 </h4>
+                                <div className="flex items-center gap-1.5 mt-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => startDayRename(day)}
+                                    data-testid="day-rename-open"
+                                    aria-label={`Renommer la séance ${day.name}`}
+                                    title="Renommer la séance"
+                                    className="p-1 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white"
+                                  >
+                                    <Pencil className="w-3 h-3" />
+                                  </button>
+                                  {dayIssueCount(program.id, day.id) > 0 && (
+                                    <span
+                                      data-testid="day-issues"
+                                      title={`${dayIssueCount(program.id, day.id)} contrôle(s) de cohérence`}
+                                      className="text-[10px] text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-md px-1.5 py-0.5 font-semibold"
+                                    >
+                                      {dayIssueCount(program.id, day.id)} contrôle(s)
+                                    </span>
+                                  )}
+                                </div>
                               </div>
 
                               <div className="flex items-center gap-1">
@@ -902,6 +1277,67 @@ export const ProgramsPage: React.FC<ProgramsPageProps> = ({
                                 </button>
                               </div>
                             </div>
+
+                            {/* LOT D — inline day rename (name only, content preserved) */}
+                            {renamingDayId === day.id && (
+                              <div
+                                className="bg-black/40 border border-violet-500/40 rounded-xl p-2.5 space-y-2"
+                                data-testid="day-rename-panel"
+                              >
+                                <label
+                                  htmlFor={`day-rename-${day.id}`}
+                                  className="block text-[10px] font-semibold text-zinc-300"
+                                >
+                                  Renommer la séance
+                                </label>
+                                <input
+                                  id={`day-rename-${day.id}`}
+                                  type="text"
+                                  value={renameValue}
+                                  autoFocus
+                                  maxLength={60}
+                                  onChange={(e) => {
+                                    setRenameValue(e.target.value);
+                                    if (renameError) setRenameError('');
+                                  }}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') commitDayRename(program, day.id);
+                                    if (e.key === 'Escape') cancelDayRename();
+                                  }}
+                                  data-testid="day-rename-input"
+                                  aria-label={`Renommer la séance ${day.name}`}
+                                  className="w-full bg-black/50 border border-white/10 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-violet-500"
+                                />
+                                {renameError && (
+                                  <p className="text-[10px] text-rose-400" role="alert" data-testid="day-rename-error">
+                                    {renameError}
+                                  </p>
+                                )}
+                                <div className="flex flex-wrap gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => commitDayRename(program, day.id)}
+                                    data-testid="day-rename-save"
+                                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-[10px] font-bold"
+                                  >
+                                    <Check className="w-3 h-3" />
+                                    Enregistrer
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={cancelDayRename}
+                                    data-testid="day-rename-cancel"
+                                    className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-300 text-[10px] font-semibold"
+                                  >
+                                    <X className="w-3 h-3" />
+                                    Annuler
+                                  </button>
+                                </div>
+                                <p className="text-[10px] text-zinc-500">
+                                  Seuls les exercices, séries, repos et étirements sont conservés tels quels.
+                                </p>
+                              </div>
+                            )}
 
                             {/* Day-level preview: exercise count, sets, duration */}
                             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-zinc-400" data-testid="day-summary">
@@ -956,6 +1392,11 @@ export const ProgramsPage: React.FC<ProgramsPageProps> = ({
                                       </span>
                                       <span className="font-medium text-zinc-200 truncate">
                                         {exCfg.exerciseName || found?.name || exCfg.exerciseId}
+{exCfg.groupId && (
+  <span className="text-[0.65em] align-baseline bg-violet-500/20 border border-violet-500/40 px-1.5 py-0.5 rounded text-[0.65em] font-semibold">
+    {exCfg.groupType === 'superset' ? 'Superset' : 'Circuit'}
+  </span>
+)}
                                       </span>
                                     </div>
                                     <div className="flex items-center gap-2 text-[11px] text-zinc-400 shrink-0">
@@ -1413,6 +1854,26 @@ export const ProgramsPage: React.FC<ProgramsPageProps> = ({
                                 <MoveRight className="w-3.5 h-3.5" />
                               </button>
                             )}
+                            {/* LOT D — real exercise replacement (only meaningful on a persisted slot) */}
+                            {editingSessionId && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  replaceCfgIndex === idx ? closeReplacePanel() : openReplacePanel(idx)
+                                }
+                                data-testid="exercise-replace"
+                                aria-expanded={replaceCfgIndex === idx}
+                                aria-label={`Remplacer l'exercice ${exCfg.exerciseName}`}
+                                title="Remplacer cet exercice (configuration conservée)"
+                                className={`ml-1 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors ${
+                                  replaceCfgIndex === idx
+                                    ? 'bg-violet-500/25 text-violet-200'
+                                    : 'text-zinc-500 hover:bg-violet-500/15 hover:text-violet-300'
+                                }`}
+                              >
+                                <ArrowLeftRight className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </div>
                         </div>
 
@@ -1497,7 +1958,18 @@ export const ProgramsPage: React.FC<ProgramsPageProps> = ({
                           </div>
 
                           <div>
-                            <label className="block text-[10px] text-zinc-400 mb-0.5">Poids cible (kg)</label>
+                            <label className="block text-[10px] text-zinc-400 mb-0.5 flex items-center justify-between">
+                              Poids cible (kg)
+                              <button
+                                type="button"
+                                onClick={() => handleOpenOneRMModal(getExerciseObj(exCfg.exerciseId)!, exCfg, 'percentage')}
+                                className="p-1.5 rounded-lg bg-white/5 hover:bg-violet-600/20 border border-white/10 hover:border-violet-500/40 text-zinc-400 hover:text-violet-400 transition-colors"
+                                aria-label="Calculateur 1RM"
+                                title="Calculateur 1RM"
+                              >
+                                <Calculator className="w-3.5 h-3.5" />
+                              </button>
+                            </label>
                             <input
                               type="number"
                               step={0.5}
@@ -1540,7 +2012,7 @@ export const ProgramsPage: React.FC<ProgramsPageProps> = ({
                                 type="number"
                                 min={0}
                                 step={1}
-                                value={Number.isFinite(exCfg.transitionRestSec) && exCfg.transitionRestSec >= 0
+                                value={Number.isFinite(exCfg.transitionRestSec) && (exCfg.transitionRestSec ?? 0) >= 0
                                   ? exCfg.transitionRestSec
                                   : globalTransitionRestSec}
                                 onChange={(e) => {
@@ -1619,6 +2091,206 @@ export const ProgramsPage: React.FC<ProgramsPageProps> = ({
                           <Check className="inline w-3.5 h-3.5 mr-1" />
                           Déplacer
                         </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* LOT D — replacement feedback: exactly what was kept, and what changed */}
+                  {replaceOutcome && (
+                    <div
+                      className="rounded-2xl bg-emerald-950/30 border border-emerald-500/30 p-3 space-y-1"
+                      data-testid="replace-outcome"
+                      role="status"
+                    >
+                      <p className="text-xs font-bold text-emerald-300 flex items-center gap-1.5">
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        {replaceOutcome.previousName} → {replaceOutcome.nextName}
+                      </p>
+                      <p className="text-[11px] text-zinc-300">
+                        Conservé : {replaceOutcome.preservedFields.join(', ')}.
+                      </p>
+                      <p className="text-[11px] text-zinc-400">
+                        {replaceOutcome.modeChanged
+                          ? `Mode ${replaceOutcome.modeBefore === 'reps' ? 'Répétitions' : 'Minuteur'} → ${replaceOutcome.modeAfter === 'reps' ? 'Répétitions' : 'Minuteur'} — nouvelle cible ${replaceOutcome.activeTarget} ${
+                              replaceOutcome.modeAfter === 'timer' ? 's' : 'reps'
+                            } (défaut de l'exercice, sans conversion).`
+                          : `Mode inchangé (${
+                              replaceOutcome.modeBefore === 'reps' ? 'Répétitions' : 'Minuteur'
+                            }) — objectif par série conservé : ${replaceOutcome.activeTarget} ${
+                              replaceOutcome.modeBefore === 'reps' ? 'reps' : 's'
+                            }.`}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setReplaceOutcome(null)}
+                        data-testid="replace-outcome-close"
+                        aria-label="Masquer le résumé du remplacement"
+                        className="text-zinc-400 hover:text-white p-0.5"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
+
+                  {/* LOT D — replacement panel: metadata suggestions + explicit mode choice */}
+                  {replaceCfgIndex != null && replaceConfig && (
+                    <div
+                      className="rounded-2xl bg-violet-950/30 border border-violet-500/30 p-4 space-y-3"
+                      data-testid="replace-panel"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <span className="text-xs font-bold text-violet-300 flex items-center gap-1.5">
+                            <ArrowLeftRight className="w-3.5 h-3.5 shrink-0" />
+                            <span className="truncate">Remplacer « {replaceConfig.exerciseName} »</span>
+                          </span>
+                          <p className="text-[11px] text-zinc-400 mt-1">
+                            Suggestions classées à partir des métadonnées de la bibliothèque (muscle, partie du
+                            corps, matériel, difficulté, mode). La configuration est conservée.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={closeReplacePanel}
+                          data-testid="replace-cancel"
+                          aria-label="Fermer le remplacement d'exercice"
+                          className="text-zinc-400 hover:text-white p-1 shrink-0"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      {replaceSuggestions.length > 0 ? (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2" data-testid="replace-suggestions">
+                          {replaceSuggestions.map((suggestion) => (
+                            <button
+                              key={suggestion.exercise.id}
+                              type="button"
+                              onClick={() => chooseReplacement(suggestion.exercise)}
+                              data-testid={`replace-suggestion-${suggestion.exercise.id}`}
+                              className="text-left bg-white/5 hover:bg-violet-600/20 border border-white/10 hover:border-violet-500/40 rounded-xl p-2.5 transition-all space-y-1"
+                            >
+                              <span className="flex items-center gap-1.5 flex-wrap">
+                                <span className="text-xs font-bold text-white">
+                                  {suggestion.exercise.name}
+                                </span>
+                                <span className="text-[10px] bg-violet-600/30 text-violet-200 px-1.5 py-0.5 rounded">
+                                  {suggestion.exercise.primaryMuscle}
+                                </span>
+                                {suggestion.sameMode && (
+                                  <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded">
+                                    Mode compatible
+                                  </span>
+                                )}
+                                {suggestion.alreadyInDay && (
+                                  <span className="text-[10px] bg-amber-500/20 text-amber-300 px-1.5 py-0.5 rounded">
+                                    Déjà dans la séance
+                                  </span>
+                                )}
+                              </span>
+                              <span className="block text-[10px] text-zinc-400">
+                                <Lightbulb className="inline w-3 h-3 mr-0.5" />
+                                {suggestion.reasons.slice(0, 3).join(' · ')}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-[11px] text-zinc-400">
+                          Aucune suggestion automatique — choisissez un exercice dans la bibliothèque ci-dessous.
+                        </p>
+                      )}
+
+                      {/* Explicit REPS <-> TIMER decision: no automatic conversion */}
+                      {replacePending && (
+                        <div
+                          className="rounded-xl bg-black/40 border border-amber-500/40 p-3 space-y-2"
+                          data-testid="replace-mode-choice"
+                          role="group"
+                          aria-label="Choix du mode après remplacement"
+                        >
+                          <p className="text-[11px] font-semibold text-amber-200">
+                            « {replacePending.name} » se fait normalement en{' '}
+                            {getExerciseNaturalMode(replacePending) === 'timer' ? 'minuteur' : 'répétitions'},
+                            alors que la configuration est en{' '}
+                            {replaceConfig.mode === 'timer' ? 'minuteur' : 'répétitions'}.
+                          </p>
+                          <p className="text-[11px] text-zinc-300">
+                            Aucune conversion automatique : choisissez explicitement ce que vous conservez.
+                          </p>
+                          <div className="flex flex-col sm:flex-row gap-2">
+                            <button
+                              type="button"
+                              onClick={() => applyExerciseReplacement(replacePending, 'keep')}
+                              data-testid="replace-keep-mode"
+                              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-100 border border-emerald-500/40 text-[11px] font-semibold text-left"
+                            >
+                              <Check className="w-3.5 h-3.5 shrink-0" />
+                              Garder{' '}
+                              {replaceConfig.mode === 'timer' ? 'le minuteur' : 'les répétitions'} — configuration
+                              intégralement conservée
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => applyExerciseReplacement(replacePending, 'adopt')}
+                              data-testid="replace-adopt-mode"
+                              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-600/30 hover:bg-amber-600/50 text-amber-100 border border-amber-500/40 text-[11px] font-semibold text-left"
+                            >
+                              {getExerciseNaturalMode(replacePending) === 'timer' ? (
+                                <Timer className="w-3.5 h-3.5 shrink-0" />
+                              ) : (
+                                <Repeat className="w-3.5 h-3.5 shrink-0" />
+                              )}
+                              Passer en{' '}
+                              {getExerciseNaturalMode(replacePending) === 'timer' ? 'minuteur' : 'répétitions'} —
+                              cible = défaut de l'exercice
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Fallback: whole library, searched by name or muscle */}
+                      <div className="space-y-2 pt-1 border-t border-white/10">
+                        <label
+                          htmlFor="replace-search"
+                          className="block text-[10px] font-semibold text-zinc-400"
+                        >
+                          Autre exercice de la bibliothèque
+                        </label>
+                        <div className="relative">
+                          <Search className="w-3.5 h-3.5 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                          <input
+                            id="replace-search"
+                            type="text"
+                            value={replaceSearch}
+                            onChange={(e) => setReplaceSearch(e.target.value)}
+                            placeholder="Rechercher par nom ou muscle..."
+                            data-testid="replace-search"
+                            className="w-full bg-black/40 border border-white/10 rounded-xl pl-8 pr-3 py-1.5 text-xs text-white focus:outline-none focus:border-violet-500"
+                          />
+                        </div>
+                        <div className="max-h-40 overflow-y-auto space-y-1 pr-1">
+                          {replaceLibraryResults.map((ex) => (
+                            <button
+                              key={ex.id}
+                              type="button"
+                              onClick={() => chooseReplacement(ex)}
+                              data-testid={`replace-option-${ex.id}`}
+                              className="w-full text-left bg-white/5 hover:bg-violet-600/20 border border-white/10 rounded-lg px-2.5 py-1.5 text-[11px] text-zinc-200 flex items-center justify-between gap-2 transition-all"
+                            >
+                              <span className="truncate">
+                                {ex.name}
+                                <span className="text-zinc-500"> · {ex.equipment}</span>
+                              </span>
+                              <span className="text-[10px] text-zinc-400 shrink-0">
+                                {ex.primaryMuscle}
+                              </span>
+                            </button>
+                          ))}
+                          {replaceLibraryResults.length === 0 && (
+                            <p className="text-[11px] text-zinc-500">Aucun exercice trouvé.</p>
+                          )}
+                        </div>
                       </div>
                     </div>
                   )}
@@ -1823,6 +2495,20 @@ export const ProgramsPage: React.FC<ProgramsPageProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* LOT E.1 — 1RM Calculator Modal */}
+      {oneRMModalOpen && oneRMModalExercise && (
+        <OneRMModal
+          isOpen={oneRMModalOpen}
+          onClose={() => {
+            setOneRMModalOpen(false);
+            setOneRMModalConfig(null);
+          }}
+          initialMode={oneRMModalMode}
+          onApplyWeight={handleOneRMApply}
+          applyLabel="Appliquer au poids cible"
+        />
       )}
     </div>
   );

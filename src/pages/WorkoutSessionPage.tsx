@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Exercise,
   ProgramExerciseConfig,
@@ -15,7 +15,7 @@ import {
 } from '../types';
 import { SportTrackStorage } from '../db/indexedDb';
 import { getDefaultStretchesForDay } from '../data/stretchesData';
-import { repsToDurationSec, durationToReps, formatDuration } from '../utilsExerciseMode';
+import { formatDuration } from '../utilsExerciseMode';
 import { computeSessionXp } from '../utilsXp';
 import { toLocalDateKey } from '../utilsCalendar';
 import { hasValidCompletedSet } from '../utilsSession';
@@ -58,7 +58,9 @@ import {
   Shuffle,
   X,
   Info,
+  Calculator,
 } from 'lucide-react';
+import { OneRMModal } from '../components/OneRMModal';
 
 interface WorkoutSessionPageProps {
   availableExercises: Exercise[];
@@ -205,7 +207,7 @@ export const WorkoutSessionPage: React.FC<WorkoutSessionPageProps> = ({
       return initialExerciseIds.map((id) => {
         const found = availableExercises.find((e) => e.id === id);
         const name = found ? found.name : 'Exercice';
-        const mg = found ? found.muscleGroup : 'Full Body';
+        const mg = found ? found.muscleGroup || 'Full Body' : 'Full Body';
         const setsCount = found ? found.defaultSets : 3;
         const reps = found ? found.defaultReps : 10;
         return {
@@ -229,7 +231,7 @@ export const WorkoutSessionPage: React.FC<WorkoutSessionPageProps> = ({
   // Finish guard: a session can only be ended once a real completed set exists.
   // While no valid set is completed the finish button is visually disabled
   // (aria-disabled + pointer-events) and the guard below refuses any attempt.
-  const canFinish = hasValidCompletedSet(sessionExercises);
+  const canFinish = useMemo(() => hasValidCompletedSet(sessionExercises), [sessionExercises]);
 
   const [selectedExerciseToAdd, setSelectedExerciseToAdd] = useState('');
   const [activeTimedSet, setActiveTimedSet] = useState<{ exIndex: number; setIndex: number } | null>(null);
@@ -238,6 +240,121 @@ export const WorkoutSessionPage: React.FC<WorkoutSessionPageProps> = ({
   // LOT 9 — 9.5: smart exercise replacement inside the current session.
   const [replaceExerciseTarget, setReplaceExerciseTarget] = useState<number | null>(null);
   const [replaceSelectionId, setReplaceSelectionId] = useState('');
+
+  // LOT E.1 — 1RM Calculator Modal
+  const [oneRMModalOpen, setOneRMModalOpen] = useState(false);
+  const [oneRMModalExercise, setOneRMModalExercise] = useState<Exercise | null>(null);
+  const [oneRMModalExIndex, setOneRMModalExIndex] = useState<number | null>(null);
+  const [oneRMModalMode, setOneRMModalMode] = useState<'estimate' | 'percentage' | 'plates'>('estimate');
+
+  const handleOpenOneRMModal = (exIdx: number, initialMode: 'estimate' | 'percentage' | 'plates' = 'estimate') => {
+    const exercise = availableExercises.find((e) => e.id === sessionExercises[exIdx]?.exerciseId);
+    if (exercise) {
+      setOneRMModalExercise(exercise);
+      setOneRMModalExIndex(exIdx);
+      setOneRMModalMode(initialMode);
+      setOneRMModalOpen(true);
+    }
+  };
+
+  const handleOneRMApply = (weightKg: number) => {
+    if (oneRMModalExIndex !== null && weightKg > 0) {
+      setSessionExercises((prev) =>
+        prev.map((log, i) =>
+          i === oneRMModalExIndex ? { ...log, sets: log.sets.map((s) => ({ ...s, weightKg })) } : log
+        )
+      );
+    }
+    setOneRMModalOpen(false);
+    setOneRMModalExIndex(null);
+  };
+
+  // LOT E.4 — Export session image
+  const handleExportSession = () => {
+    // Prepare session data for image generation
+    const totalSets = sessionExercises.reduce((acc, log) => acc + log.sets.length, 0);
+    const completedSets = sessionExercises.reduce(
+      (acc, log) => acc + log.sets.filter((s) => s.completed).length,
+      0
+    );
+    const volume = session.totalVolumeKg;
+    const durationMinutes = session.durationMinutes;
+    const exercisesCount = session.exercises.length;
+    const date = new Date(session.date);
+    const formattedDate = `${date.getDate()}/${date.getMonth() + 1}/${date.getFullYear()}`;
+
+    // Calculate XP
+    const totalXP = session.stretchesCompleted
+      ? 250 + completedSets * 20 + session.stretchesCompleted * 25
+      : 0;
+
+    // RPE stats
+    const rpeSets = session.exercises.flatMap((log) => log.sets.filter((s) => s.rpe !== undefined && s.rpe !== null));
+    const averageRPE = rpeSets.length > 0 ? rpeSets.reduce((a, r) => a + r, 0) / rpeSets.length : null;
+    const rpeCount = rpeSets.length;
+
+    // Best exercises
+    const bestExercises = session.exercises
+      .filter((log) => log.sets.some((s) => s.completed))
+      .map((log) => ({
+        name: log.exerciseName,
+        weight: Math.max(...log.sets.filter((s) => s.completed && s.weightKg > 0).map((s) => s.weightKg), 0),
+        reps: Math.max(...log.sets.filter((s) => s.completed && s.reps > 0).map((s) => s.reps), 0),
+      }));
+
+    // Generate image
+    const canvas = document.createElement('canvas');
+    canvas.width = WORKOUT_CARD_WIDTH;
+    canvas.height = WORKOUT_CARD_HEIGHT;
+    const ctx = canvas.getContext('2d')!;
+
+    // Background
+    ctx.fillStyle = '#0f0f15';
+    ctx.fillRect(0, 0, WORKOUT_CARD_WIDTH, WORKOUT_CARD_HEIGHT);
+
+    // Header
+    ctx.fillStyle = '#1a1a2e';
+    ctx.fillRect(0, 0, WORKOUT_CARD_WIDTH, 80);
+    ctx.fillStyle = 'white';
+    ctx.fillRect(40, 20, 40, 40); // placeholder icon
+    ctx.fillStyle = 'white';
+    ctx.fillText('SportTrack', 80, 40);
+    ctx.fillText(session.title || 'Séance', 80, 60);
+
+    // Date
+    ctx.fillStyle = 'white';
+    ctx.fillText(formattedDate, 40, 100);
+
+    // Summary
+    ctx.fillStyle = 'white';
+    ctx.fillText(`${exercisesCount} exercices`, 40, 130);
+    ctx.fillText(`${completedSets} séries`, 40, 150);
+    if (volume > 0) {
+      ctx.fillText(`${volume} kg`, 40, 170);
+    }
+    if (showXP && totalXP > 0) {
+      ctx.fillText(`${totalXP} XP`, 40, 190);
+    }
+    if (showRPE && averageRPE !== null && rpeCount > 0) {
+      ctx.fillText(`RPE ${averageRPE.toFixed(1)} / 10`, 40, 210);
+    }
+
+    // Convert to blob and trigger download
+    canvas.toBlob((blob) => {
+      if (blob) {
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `sporttrack-seance-${session.id}.png`;
+        document.body.appendChild(link);
+        link.click();
+        setTimeout(() => {
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+        }, 100);
+      }
+    }, 'image/png');
+  };
 
   const handleRequestReplace = (exIdx: number) => {
     setReplaceSelectionId('');
@@ -458,13 +575,18 @@ export const WorkoutSessionPage: React.FC<WorkoutSessionPageProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Debounced save on any meaningful change.
+  // Debounced save on any meaningful change. LOT 13: the countdown states
+  // (restSecondsLeft / activeTimedSet / timedSecondsLeft) are deliberately NOT
+  // save triggers — they tick every second and previously produced ~1 complete
+  // IndexedDB write per second while a timer ran. They are kept fresh in the
+  // live snapshot by the patch effect below, and the pagehide/beforeunload
+  // flush persists the exact current countdown whenever a real save fires.
   useEffect(() => {
     if (draftLoadedRef.current && !draftDeletedRef.current && liveSnapshotRef.current && draftHasActivity(liveSnapshotRef.current)) {
       scheduleDraftSave();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionExercises, sessionTitle, notes, feeling, currentPhase, completedStretchesCount, currentStretchIdx, currentSideIndex, guidedCheckpoint, restSecondsLeft, activeTimedSet, timedSecondsLeft]);
+  }, [sessionExercises, sessionTitle, notes, feeling, currentPhase, completedStretchesCount, currentStretchIdx, currentSideIndex, guidedCheckpoint]);
 
   // Capture the exact rest / timed countdown into the live snapshot as it elapses
   // (not a save trigger, but keeps the draft accurate when a real save fires).
@@ -700,7 +822,7 @@ export const WorkoutSessionPage: React.FC<WorkoutSessionPageProps> = ({
   const handleUpdateSet = (
     exIndex: number,
     setIndex: number,
-    field: 'weightKg' | 'reps',
+    field: 'weightKg' | 'reps' | 'rpe',
     val: number
   ) => {
     const updated = [...sessionExercises];
@@ -885,7 +1007,7 @@ export const WorkoutSessionPage: React.FC<WorkoutSessionPageProps> = ({
       {
         exerciseId: found.id,
         exerciseName: found.name,
-        muscleGroup: found.muscleGroup,
+        muscleGroup: found.muscleGroup || 'Full Body',
         sets: Array.from({ length: setsCount }, (_, i) => ({
           setNumber: i + 1,
           weightKg: 0,
@@ -901,18 +1023,23 @@ export const WorkoutSessionPage: React.FC<WorkoutSessionPageProps> = ({
 
   // Live Bodybuilding volume & stats (Stretches NOT counted in volume.
   // Timer sets never contribute weight x reps: only reps-mode completed sets.)
-  const totalVolume = sessionExercises.reduce((total, ex) => {
-    return (
-      total +
-      ex.sets.reduce((exTotal, s) => {
-        return s.completed && s.mode !== 'timer' ? exTotal + s.weightKg * s.reps : exTotal;
-      }, 0)
-    );
-  }, 0);
+  // LOT 13: memoized so a 1-second timer tick doesn't re-run the reduce chains.
+  const totalVolume = useMemo(() => {
+    return sessionExercises.reduce((total, ex) => {
+      return (
+        total +
+        ex.sets.reduce((exTotal, s) => {
+          return s.completed && s.mode !== 'timer' ? exTotal + s.weightKg * s.reps : exTotal;
+        }, 0)
+      );
+    }, 0);
+  }, [sessionExercises]);
 
-  const completedSetsCount = sessionExercises.reduce((count, ex) => {
-    return count + ex.sets.filter((s) => s.completed).length;
-  }, 0);
+  const completedSetsCount = useMemo(() => {
+    return sessionExercises.reduce((count, ex) => {
+      return count + ex.sets.filter((s) => s.completed).length;
+    }, 0);
+  }, [sessionExercises]);
 
   // ==========================================
   // STRETCHING LOGIC & NAVIGATION
@@ -1226,14 +1353,25 @@ export const WorkoutSessionPage: React.FC<WorkoutSessionPageProps> = ({
               <span className="font-mono text-lg font-bold text-amber-300" data-testid="rest-timer">{formatTime(restSecondsLeft)}</span>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
               <button
-                onClick={() => setRestSecondsLeft((prev) => (prev !== null ? prev + 30 : 30))}
+                type="button"
+                aria-label="Retirer 15 secondes de repos"
+                onClick={() => setRestSecondsLeft((prev) => (prev !== null ? Math.max(0, prev - 15) : 0))}
                 className="text-xs bg-white/10 text-white font-medium px-2.5 py-1 rounded-lg hover:bg-white/20 transition-colors"
               >
-                +30s
+                −15 s
               </button>
               <button
+                type="button"
+                aria-label="Ajouter 15 secondes de repos"
+                onClick={() => setRestSecondsLeft((prev) => (prev !== null ? prev + 15 : 15))}
+                className="text-xs bg-white/10 text-white font-medium px-2.5 py-1 rounded-lg hover:bg-white/20 transition-colors"
+              >
+                +15 s
+              </button>
+              <button
+                type="button"
                 onClick={() => setRestSecondsLeft(0)}
                 className="text-xs bg-black/40 text-zinc-300 px-2.5 py-1 rounded-lg hover:text-white transition-colors"
               >
@@ -1358,11 +1496,6 @@ export const WorkoutSessionPage: React.FC<WorkoutSessionPageProps> = ({
                          <Shuffle className="inline w-3 h-3 mr-1" />
                          Remplacer
                        </button>
-                       <span className="text-[9px] text-zinc-500 ml-1">
-                         {ex.sets[0]?.mode === 'timer'
-                           ? `≈ ${durationToReps(ex.exerciseName, ex.sets[0]?.durationSec || 0)} reps`
-                           : `≈ ${formatDuration(repsToDurationSec(ex.exerciseName, ex.sets[0]?.reps || 0))}`}
-                       </span>
                      </div>
                      {restPanelOpen === exIdx && (
                        <div className="mt-2 rounded-xl bg-black/30 border border-white/10 p-3 space-y-1.5">
@@ -1392,9 +1525,9 @@ export const WorkoutSessionPage: React.FC<WorkoutSessionPageProps> = ({
                   </span>
                 </div>
 
-                {/* Sets Table */}
+                {/* Sets Table — desktop header (mobile uses per-set cards) */}
                 <div className="space-y-2">
-                  <div className="grid grid-cols-12 text-[11px] font-bold text-zinc-400 uppercase tracking-wider px-2">
+                  <div className="hidden sm:grid grid-cols-12 text-[11px] font-bold text-zinc-400 uppercase tracking-wider px-2">
                     <span className="col-span-2">Série</span>
                     <span className="col-span-4 text-center">Charge (kg)</span>
                     <span className="col-span-4 text-center">Objectif</span>
@@ -1404,31 +1537,92 @@ export const WorkoutSessionPage: React.FC<WorkoutSessionPageProps> = ({
                   {ex.sets.map((set, sIdx) => (
                     <div
                       key={sIdx}
-                      className={`grid grid-cols-12 items-center gap-2 p-2.5 rounded-2xl border transition-colors ${
+                      className={`flex flex-col gap-2.5 p-3 rounded-2xl border transition-colors sm:grid sm:grid-cols-12 sm:items-center sm:gap-2 sm:p-2.5 ${
                         set.completed
                           ? 'bg-violet-600/20 border-violet-500/40 text-violet-200'
                           : 'bg-white/5 border-white/10 text-zinc-300'
                       }`}
                     >
-                      <div className="col-span-2 font-mono font-bold text-xs pl-2">
+                      {/* Mobile: série number + validate button */}
+                      <div className="flex items-center justify-between sm:hidden">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono font-bold text-xs">{`Série ${set.setNumber}`}</span>
+                          <span className="text-[10px] uppercase tracking-wider text-zinc-500">
+                            {set.mode === 'timer' ? 'chrono' : 'reps'}
+                          </span>
+                        </div>
+                        <button
+                          onClick={() => handleToggleSet(exIdx, sIdx)}
+                          disabled={set.completed || (set.mode === 'timer' && (set.durationSec || 0) <= 0)}
+                          aria-label={set.completed ? 'Marquer la série comme incomplète' : 'Valider la série'}
+                          aria-pressed={set.completed}
+                          className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
+                            set.completed
+                              ? 'bg-emerald-500 text-black font-bold shadow-lg shadow-emerald-950'
+                              : 'bg-white/5 border border-white/15 text-zinc-400'
+                          }`}
+                        >
+                          <Check className="w-4 h-4 stroke-[3]" />
+                        </button>
+                      </div>
+
+                      {/* Desktop: série number */}
+                      <div className="hidden sm:block sm:col-span-2 font-mono font-bold text-xs pl-2">
                         #{set.setNumber}
                       </div>
 
-                      <div className="col-span-4 flex items-center justify-center gap-1">
-                        <input
-                          type="number"
-                          step={0.5}
-                          min={0}
-                          value={set.weightKg}
-                          onChange={(e) =>
-                            handleUpdateSet(exIdx, sIdx, 'weightKg', Number(e.target.value))
-                          }
-                          className="w-16 bg-black/40 border border-white/10 rounded-xl py-1.5 text-center font-bold text-sm text-white focus:outline-none focus:border-violet-500"
-                        />
-                        <span className="text-xs text-zinc-400">kg</span>
+                      {/* Charge */}
+                      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-center sm:gap-1 sm:col-span-4">
+                        <span className="text-[10px] font-semibold text-zinc-500 sm:hidden">Charge (kg)</span>
+                        <div className="flex items-center justify-between gap-1">
+                          <input
+                            type="number"
+                            step={0.5}
+                            min={0}
+                            value={set.weightKg}
+                            onChange={(e) =>
+                              handleUpdateSet(exIdx, sIdx, 'weightKg', Number(e.target.value))
+                            }
+                            className="w-20 bg-black/40 border border-white/10 rounded-xl py-1.5 text-center font-bold text-sm text-white focus:outline-none focus:border-violet-500 sm:w-16"
+                          />
+                          <span className="text-xs text-zinc-400">kg</span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-semibold text-zinc-300">RPE</span>
+                            <div className="flex gap-1">
+                              {([1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as number[]).map((r) => (
+                                <button
+                                  key={r}
+                                  type="button"
+                                  onClick={() => handleUpdateSet(exIdx, sIdx, 'rpe', r)}
+                                  className={`inline-flex items-center gap-0.5 rounded-full px-2 py-1.5 text-[10px] font-semibold ${
+                                    set.rpe === r
+                                      ? 'bg-violet-600 text-white shadow'
+                                      : 'text-zinc-400 hover:bg-violet-100 border border-white/10'
+                                  }`}
+                                  aria-label={`RPE ${r}`}
+                                >
+                                  {r}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleOpenOneRMModal(exIdx, 'percentage')}
+                            className="p-1.5 rounded-lg bg-white/5 hover:bg-violet-600/20 border border-white/10 hover:border-violet-500/40 text-zinc-400 hover:text-violet-400 transition-colors"
+                            aria-label="Calculateur 1RM"
+                            title="Calculateur 1RM"
+                          >
+                            <Calculator className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
 
-                      <div className="col-span-4 flex items-center justify-center gap-1">
+                      {/* Objectif */}
+                      <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-center sm:gap-1 sm:col-span-4">
+                        <span className="text-[10px] font-semibold text-zinc-500 sm:hidden">
+                          Objectif ({set.mode === 'timer' ? 'chrono' : 'reps'})
+                        </span>
                         {set.mode === 'timer' ? (
                           <div className="flex flex-col items-center gap-1.5">
                             <div className="flex items-center justify-center gap-1">
@@ -1469,13 +1663,13 @@ export const WorkoutSessionPage: React.FC<WorkoutSessionPageProps> = ({
                               type="button"
                               data-testid={`timed-set-btn-${exIdx}-${sIdx}`}
                               onClick={() => activeTimedSet?.exIndex === exIdx && activeTimedSet?.setIndex === sIdx ? handleStopTimedSet() : handleStartTimedSet(exIdx, sIdx)}
-                              disabled={set.completed || !(set.durationSec > 0)}
+                              disabled={set.completed || !((set.durationSec ?? 0) > 0)}
                               className={`min-w-24 px-2 py-1.5 rounded-xl font-mono font-bold text-sm border transition-all ${activeTimedSet?.exIndex === exIdx && activeTimedSet?.setIndex === sIdx ? 'bg-amber-500/20 text-amber-300 border-amber-500/40' : 'bg-black/40 text-white border-white/10 disabled:opacity-40'}`}
                             >
                               <Timer className="inline w-3.5 h-3.5 mr-1" />
                               {activeTimedSet?.exIndex === exIdx && activeTimedSet?.setIndex === sIdx ? formatDuration(timedSecondsLeft) : formatDuration(set.durationSec || 0)}
                             </button>
-                            {set.durationSec > 0 ? (
+                            {(set.durationSec ?? 0) > 0 ? (
                               <span className="text-[9px] text-zinc-500">La durée est indépendante des reps</span>
                             ) : (
                               <span className="text-[9px] font-bold text-amber-400">Durée non configurée — saisissez une durée</span>
@@ -1495,17 +1689,20 @@ export const WorkoutSessionPage: React.FC<WorkoutSessionPageProps> = ({
                                 // Reps and timer are independent: changing reps must not alter the saved timer.
                                 setSessionExercises(updated);
                               }}
-                              className="w-16 bg-black/40 border border-white/10 rounded-xl py-1.5 text-center font-bold text-sm text-white focus:outline-none focus:border-violet-500"
+                              className="w-20 bg-black/40 border border-white/10 rounded-xl py-1.5 text-center font-bold text-sm text-white focus:outline-none focus:border-violet-500 sm:w-16"
                             />
                             <span className="text-xs text-zinc-400">reps</span>
                           </>
                         )}
                       </div>
 
-                      <div className="col-span-2 flex items-center justify-end gap-1">
+                      {/* Desktop: validate button */}
+                      <div className="hidden sm:flex sm:col-span-2 sm:items-center sm:justify-end sm:gap-1">
                         <button
                           onClick={() => handleToggleSet(exIdx, sIdx)}
                           disabled={set.completed || (set.mode === 'timer' && (set.durationSec || 0) <= 0)}
+                          aria-label={set.completed ? 'Marquer la série comme incomplète' : 'Valider la série'}
+                          aria-pressed={set.completed}
                           className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
                             set.completed
                               ? 'bg-emerald-500 text-black font-bold shadow-lg shadow-emerald-950'
@@ -1517,7 +1714,8 @@ export const WorkoutSessionPage: React.FC<WorkoutSessionPageProps> = ({
                         </button>
                       </div>
 
-                      <div className="col-span-12 flex items-center justify-between gap-2 pt-1.5 mt-1 border-t border-white/5">
+                      {/* Repos après cette série */}
+                      <div className="flex items-center justify-between gap-2 pt-1.5 mt-1 border-t border-white/5 sm:col-span-12">
                         <span className="text-[10px] font-semibold text-zinc-400">Repos après cette série</span>
                         <div className="flex items-center gap-1.5">
                           <input
@@ -1795,6 +1993,8 @@ export const WorkoutSessionPage: React.FC<WorkoutSessionPageProps> = ({
               <div className="flex items-center gap-3">
                 <button
                   onClick={() => setAudioEnabled(!audioEnabled)}
+                  aria-label={audioEnabled ? 'Désactiver le son' : 'Activer le son'}
+                  aria-pressed={audioEnabled}
                   className={`p-2.5 rounded-xl border transition-colors ${
                     audioEnabled
                       ? 'bg-violet-600/30 border-violet-400 text-violet-200'
@@ -2162,6 +2362,18 @@ export const WorkoutSessionPage: React.FC<WorkoutSessionPageProps> = ({
                 <CheckCircle2 className="w-5 h-5" />
                 <span>TERMINER ET ENREGISTRER LA SÉANCE</span>
               </button>
+              {/* LOT E.4 — Bouton export séance */}
+              <button
+                id="btn-export-session"
+                onClick={handleExportSession}
+                disabled={!canFinish}
+                className={`sm:w-1/3 py-4 rounded-2xl bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white font-semibold text-xs transition-colors border border-white/10 ${canFinish ? '' : 'pointer-events-none opacity-40'}`}
+                aria-label="Exporter la séance"
+                title="Exporter la séance"
+              >
+                <Download className="w-4 h-4 mr-2" />
+                <span>Exporter</span>
+              </button>
             </div>
             {!canFinish && (
               <p
@@ -2175,6 +2387,20 @@ export const WorkoutSessionPage: React.FC<WorkoutSessionPageProps> = ({
             )}
           </div>
         </div>
+      )}
+
+      {/* LOT E.1 — 1RM Calculator Modal */}
+      {oneRMModalOpen && oneRMModalExercise && (
+        <OneRMModal
+          isOpen={oneRMModalOpen}
+          onClose={() => {
+            setOneRMModalOpen(false);
+            setOneRMModalExIndex(null);
+          }}
+          initialMode={oneRMModalMode}
+          onApplyWeight={handleOneRMApply}
+          applyLabel="Appliquer à toutes les séries"
+        />
       )}
     </div>
   );

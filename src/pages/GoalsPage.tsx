@@ -304,26 +304,42 @@ export const GoalsPage: React.FC<GoalsPageProps> = ({
   };
 
   // Filtered goals.
+  // LOT 13: goalProgress (same goalWithCurrent + goalProgress triple) is now
+  // computed once per goal per render in goalProgressMap, shared by filteredGoals,
+  // statusCounts, and the goal list render (avoids ~3N identical calls).
+  const goalProgressMap = useMemo(() => {
+    const m = new Map<string, { pg: ReturnType<typeof goalProgress>; withCurrent: Goal }>();
+    const today = todayStr();
+    for (const g of goals) {
+      const withCurrent = goalWithCurrent(g, goalContext);
+      m.set(g.id, { pg: goalProgress(withCurrent, today), withCurrent });
+    }
+    return m;
+  }, [goals, goalContext]);
+
   const filteredGoals = useMemo(() => {
     return goals.filter((g) => {
       const m = g.goalMetric || goalMetricFromCategory(g.category);
       if (metricFilter !== 'all' && m !== metricFilter) return false;
-      const pg = goalProgress(goalWithCurrent(g, goalContext), todayStr());
-      const effective: GoalStatus = g.completed && pg.status !== 'Atteint' ? 'Atteint' : pg.status;
+      const entry = goalProgressMap.get(g.id);
+      if (!entry) return true;
+      const effective: GoalStatus = g.completed && entry.pg.status !== 'Atteint' ? 'Atteint' : entry.pg.status;
       if (statusFilter !== 'all' && effective !== statusFilter) return false;
       return true;
     });
-  }, [goals, metricFilter, statusFilter, goalContext]);
+  }, [goals, metricFilter, statusFilter, goalProgressMap]);
 
   const statusCounts = useMemo(() => {
     const c = { Actif: 0, Atteint: 0, Expiré: 0 };
     for (const g of goals) {
-      const pg = goalProgress(goalWithCurrent(g, goalContext), todayStr());
-      const effective: GoalStatus = g.completed && pg.status !== 'Atteint' ? 'Atteint' : pg.status;
+      const entry = goalProgressMap.get(g.id);
+      const effective: GoalStatus = entry
+        ? (g.completed && entry.pg.status !== 'Atteint' ? 'Atteint' : entry.pg.status)
+        : 'Actif';
       c[effective]++;
     }
     return c;
-  }, [goals, goalContext]);
+  }, [goals, goalProgressMap]);
 
   return (
     <div id="page-goals" data-testid="goals-page" className="space-y-6 max-w-5xl mx-auto pb-10">
@@ -640,9 +656,9 @@ export const GoalsPage: React.FC<GoalsPageProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {filteredGoals.map((g) => {
             const metric = g.goalMetric || goalMetricFromCategory(g.category);
-            // Smart goals: compute current value from real data.
-            const withCurrent = goalWithCurrent(g, goalContext);
-            const pg = goalProgress(withCurrent, todayStr());
+            // LOT 13: re-use the precomputed progress from goalProgressMap
+            // instead of recomputing goalProgress(goalWithCurrent(...)) a third time.
+            const { withCurrent, pg } = goalProgressMap.get(g.id)!;
             const effectiveStatus: GoalStatus = g.completed && pg.status !== 'Atteint' ? 'Atteint' : pg.status;
             const percent = effectiveStatus === 'Atteint' ? 100 : pg.percent;
             const currentVal = withCurrent.currentValue;
@@ -656,7 +672,7 @@ export const GoalsPage: React.FC<GoalsPageProps> = ({
               <div
                 key={g.id}
                 data-testid="goal-card"
-                className={`rounded-3xl p-6 border flex flex-col justify-between gap-4 transition-all backdrop-blur-xl ${
+                className={`rounded-3xl p-6 border flex flex-col justify-between gap-4 transition-all backdrop-blur-md ${
                   effectiveStatus === 'Atteint'
                     ? 'bg-emerald-950/20 border-emerald-500/40 shadow-lg shadow-emerald-950/20'
                     : 'bg-white/5 border-white/10 hover:border-white/20'

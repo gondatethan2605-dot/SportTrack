@@ -132,6 +132,10 @@ export interface ProgramExerciseConfig {
   restSec: number;
   transitionRestSec?: number;
   notes?: string;
+  // F.1 — Group membership (superset / circuit).
+  // Optionnel : absent sur les anciens programmes, inexistant = exercice isolé.
+  groupId?: string;
+  groupType?: 'superset' | 'circuit';
 }
 
 export type StretchSideType = 'side' | 'leg' | 'arm';
@@ -166,6 +170,9 @@ export interface WorkoutProgramDay {
   exercises?: ProgramExerciseConfig[]; // full rich configuration
   stretches?: StretchItem[]; // End-of-session stretching routine
   notes?: string;
+  // F.1 — Groupes superset/circuit (optionnel, F.1-A).
+  // Absent sur les anciens programmes = aucun groupe.
+  groups?: ProgramExerciseGroup[];
 }
 
 export interface WorkoutProgram {
@@ -178,6 +185,11 @@ export interface WorkoutProgram {
   isActive: boolean;
   color: string;
   days: WorkoutProgramDay[];
+  // LOT D — Programme système (ex: MY_PROGRAM v2) : non supprimable, non modifiable en structure
+  // L'interface ne doit PAS permettre de supprimer un programme isSystem.
+  isSystem?: boolean;
+  // Flag optionnel pour marquer un programme comme protégé (utilisateur ne peut pas le supprimer)
+  isProtected?: boolean;
 }
 
 export interface WorkoutSet {
@@ -187,6 +199,7 @@ export interface WorkoutSet {
   mode?: ExerciseMode;
   durationSec?: number;
   completed: boolean;
+  rpe?: number;
 }
 
 export interface SessionExerciseLog {
@@ -413,4 +426,26 @@ export interface ExerciseBest {
   lastPerformedDate: string | null;
   timesPerformed: number;
   updatedAt: string;
+}
+
+export interface ProgramExerciseGroup {
+  id: string;
+  type: 'superset' | 'circuit';
+  rounds?: number;
+  restBetweenExercisesSec?: number;
+  restBetweenRoundsSec?: number;
+}
+
+export interface ExercisesPageProps {
+  exercises: Exercise[];
+  exercisePerformances: ExercisePerformance[];
+  exerciseBests: ExerciseBest[];
+  programs: WorkoutProgram[];
+  programUsage: Record<string, number>;
+  onAddExercise: (exercise: Exercise) => void;
+  onUpdateExercise: (exercise: Exercise) => void;
+  onDeleteExercise: (exerciseId: string) => void;
+  onToggleFavorite: (exerciseId: string) => void;
+  onAddExerciseToProgram: (exercise: Exercise, programId: string, dayId: string) => void;
+  initialFilter: string;
 }

@@ -179,7 +179,6 @@ const goalCtx = buildHomeGoalContext({
 
 const makeGoal = (partial: Partial<Goal> & { title: string }): Goal => ({
   id: 'g' + Math.random().toString(36).slice(2),
-  title: partial.title,
   category: 'custom',
   targetValue: 100,
   currentValue: 50,

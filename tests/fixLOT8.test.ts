@@ -146,8 +146,14 @@ ok('S4 backup.ts : stocke la validation des nombres finis + limites', () => {
 ok('S5 WorkoutSessionPage : steppers timer ≥ 36px conservés (w-9 h-9)', () => {
   assert.ok(workspaceRaw.includes('w-9 h-9 rounded-lg'));
 });
-ok('S5 moteur guidé : import repsToDurationSec/durationToReps (cadence, jamais persisté)', () => {
-  assert.ok(workspaceRaw.includes('repsToDurationSec, durationToReps'));
+// LOT 11 supersedes the previous cosmetic guard: the "≈" cadence conversion is
+// REMOVED from the UI (reps and timer stays independent, never converted nor
+// persisted). We keep the spirit of S5 (no conversion shown) but reverse it.
+ok('S5 WorkoutSessionPage : aucune conversion reps<->durée affichée (LOT 11)', () => {
+  assert.ok(!workspaceRaw.includes('≈'), 'le "≈" doit avoir disparu (LOT 11)');
+  assert.ok(!workspaceRaw.includes('repsToDurationSec'), 'repsToDurationSec ne doit plus être importé');
+  assert.ok(!workspaceRaw.includes('durationToReps'), 'durationToReps ne doit plus être importé');
+  assert.ok(workspaceRaw.includes('formatDuration'), 'formatDuration reste utilisé (minuteur)');
 });
 ok('S5 moteur guidé : fichier moteur intact', () => {
   assert.ok(fileExists(path.join(SRC, 'components', 'workout', 'workoutGuidedEngine.ts')));

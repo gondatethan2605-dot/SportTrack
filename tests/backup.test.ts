@@ -247,7 +247,7 @@ ok('parseBackup ne modifie aucune donnée (pure)', () => {
   ok('import: sessionDrafts inclus et validés', () => {
     const { data } = parseBackup(serializeBackup(withDraft));
     assert.equal((data.sessionDrafts as unknown[]).length, 1);
-    assert.equal((data.sessionDrafts[0] as any).id, 'active_draft');
+    assert.equal((data.sessionDrafts as any[])[0].id, 'active_draft');
   });
 }
 
@@ -286,12 +286,12 @@ na('reset réglages réel / données intactes (navigateur)');
   ok('LOT8 S4 données négatives finies tolérées (le backup de l\'app reste importable)', () => {
     const data = sampleData({ measurements: [{ id: 'm-5', date: '2026-01-01', weightKg: -5 }] });
     const { data: parsed } = parseBackup(serializeBackup(data));
-    assert.equal(parsed.measurements[0].weightKg, -5);
+    assert.equal((parsed.measurements as any[])[0].weightKg, -5);
   });
   ok('LOT8 S4 données inconnues tolérées (forward-compat)', () => {
     const data = sampleData({ sessions: [{ id: 'sX', title: 'S', date: '2026-01-01', completed: true, futureField: { custom: 1 } }] });
     const { data: parsed } = parseBackup(serializeBackup(data));
-    assert.equal(parsed.sessions[0].futureField.custom, 1);
+    assert.equal((parsed.sessions as any[])[0].futureField.custom, 1);
   });
   ok('LOT8 S4 une valeur numérique corrompue reste refusée (pas de relâchement)', () => {
     // L'export normalise déjà (sanitizeExportValue) : on forge donc un JSON brut

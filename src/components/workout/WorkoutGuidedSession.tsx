@@ -6,6 +6,7 @@ import {
   WorkoutDraftGuided,
 } from '../../types';
 import {
+  adjustRestSeconds,
   buildExerciseSteps,
   buildStretchSteps,
   DEFAULT_COUNTDOWN_SEC,
@@ -17,6 +18,7 @@ import {
   GuidedStep,
   resolveFirstIncompleteStep,
   resolveGuidedRestSec,
+  resolveStretchRestSec,
 } from './workoutGuidedEngine';
 import { playWorkoutSound, startWorkoutMusic, unlockAudio, type WorkoutSoundKind } from './workoutAudio';
 import { vibrate, VIBRATION_PATTERNS, type VibrationPatternKey } from './workoutVibration';
@@ -121,9 +123,6 @@ export const WorkoutGuidedSession: React.FC<WorkoutGuidedSessionProps> = ({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [interactiveMessage, setInteractiveMessage] = useState<string | null>(null);
-  // Optional rest boost (+15s) applied to the CURRENT rest only; never changes
-  // the global restSec. Reset when the rest finishes.
-  const [restBoost, setRestBoost] = useState(0);
 
   const stepsRef = useRef(allSteps);
   stepsRef.current = allSteps;
@@ -137,9 +136,7 @@ export const WorkoutGuidedSession: React.FC<WorkoutGuidedSessionProps> = ({
   settingsRef.current = settings;
   const restSecRef = useRef(restSec);
   restSecRef.current = restSec;
-  const restBoostRef = useRef(restBoost);
-  restBoostRef.current = restBoost;
-  const pausedFromRef = useRef<GuidedPhase>('exercise');
+  const pausedFromRef = useRef<'countdown' | 'exercise' | 'rest' | 'stretch'>('exercise');
   const zeroHandlerRef = useRef<(() => void) | null>(null);
   const intervalRef = useRef<number | null>(null);
   const goTimerRef = useRef<number | null>(null);
@@ -284,9 +281,7 @@ export const WorkoutGuidedSession: React.FC<WorkoutGuidedSessionProps> = ({
         exercises,
         fallbackRestSec: restSecRef.current,
         exerciseTransitionRestSec: settingsRef.current.exerciseTransitionRestSec,
-      }) + restBoostRef.current;
-    setRestBoost(0);
-    restBoostRef.current = 0;
+      });
     // A transition rest of 0 (e.g. last exercise before stretches) skips the
     // rest phase entirely and goes straight to the countdown of this step.
     if (resolved <= 0) {
@@ -308,6 +303,34 @@ export const WorkoutGuidedSession: React.FC<WorkoutGuidedSessionProps> = ({
     setT(effectiveRest);
   }
 
+  // Rest BETWEEN two CONSECUTIVE stretches: the guided flow inserts it before
+  // a stretch that follows another stretch — including the two sides of the
+  // SAME item and repeated occurrences of the same exercise (a side change
+  // counts as a new stretch). Uses the same SportTrack rest parameter as the
+  // rest between exercises. A resolved rest <= 0 skips the rest and goes
+  // straight into the stretch (same semantics as exercise transitions).
+  function startStretchRest(): void {
+    const idx = stepIndexRef.current;
+    const s = stepsRef.current[idx];
+    const st = s && s.kind === 'stretch' ? stretches[s.stretchIndex] : undefined;
+    const resolved = resolveStretchRestSec(settingsRef.current.exerciseTransitionRestSec);
+    if (resolved <= 0 || !st) {
+      enterStep(idx);
+      return;
+    }
+    phaseRef.current = 'rest';
+    setPhase('rest');
+    cueFeedback('rest', 'restStart', 'restStart');
+    const stretchName = st.name.toLowerCase();
+    zeroHandlerRef.current = () => {
+      cueFeedback('rest', 'restEnd', 'restEnd');
+      speak(`Prochain étirement : ${stretchName}`, settingsRef.current.voiceEnabled);
+      enterStep(idx);
+    };
+    tRef.current = resolved;
+    setT(resolved);
+  }
+
   function advance(): void {
     const next = stepIndexRef.current + 1;
     if (next >= stepsRef.current.length) {
@@ -320,7 +343,19 @@ export const WorkoutGuidedSession: React.FC<WorkoutGuidedSessionProps> = ({
     }
     const targetStep = stepsRef.current[next];
     if (targetStep.kind === 'stretch') {
-      enterStep(next);
+      const prev = stepsRef.current[stepIndexRef.current];
+      // Rest between EVERY consecutive stretch step: the two sides of the SAME
+      // stretch and repeated occurrences follow the same rule as two distinct
+      // stretches. The last exercise still goes straight into the first
+      // stretch (no manufactured rest).
+      const betweenTwoStretches = prev?.kind === 'stretch';
+      if (betweenTwoStretches) {
+        stepIndexRef.current = next;
+        setStepIndex(next);
+        startStretchRest();
+      } else {
+        enterStep(next);
+      }
     } else {
       // next exercise set: enter the global rest, then countdown, then the set.
       stepIndexRef.current = next;
@@ -458,10 +493,18 @@ export const WorkoutGuidedSession: React.FC<WorkoutGuidedSessionProps> = ({
     stepIndexRef.current = idx;
     setStepIndex(idx);
     const remainder = () => Math.max(0, Math.round(ck.timerRemaining || 0));
+    // A rest resumes as a stretch-rest when the upcoming step is a stretch
+    // (exercise rests always target exercise steps); startStretchRest() and
+    // startRest() re-arm the matching auto-finish handler with the right cue.
+    const upcoming = steps[idx];
+    const restoreRest = () => {
+      if (upcoming?.kind === 'stretch') startStretchRest();
+      else startRest();
+    };
     if (ck.phase === 'pause') {
       pausedFromRef.current = ck.resumePhase ?? 'exercise';
       const base = pausedFromRef.current;
-      if (base === 'rest') startRest();
+      if (base === 'rest') restoreRest();
       else if (base === 'countdown') startCountdown();
       else enterStep(idx);
       phaseRef.current = 'pause';
@@ -470,7 +513,7 @@ export const WorkoutGuidedSession: React.FC<WorkoutGuidedSessionProps> = ({
       return;
     }
     if (ck.phase === 'rest') {
-      startRest();
+      restoreRest();
       tRef.current = remainder();
       setT(remainder());
       onTimerRunningChange(true);
@@ -624,17 +667,25 @@ export const WorkoutGuidedSession: React.FC<WorkoutGuidedSessionProps> = ({
     setRestSec(clamped);
   };
 
-  // +15 sec for the CURRENT rest only — global restSec is unaffected.
+  // +15 sec for the CURRENT rest only (exercise rest AND stretch rest) — the
+  // global restSec / transition rest is never changed and the extra time lives
+  // only in the countdown `t` (persisted as timerRemaining). Pure call: it goes
+  // straight through tRef.current + adjustRestSeconds, with NO side effect
+  // inside a React state updater — a click always adds exactly 15 s.
   const handleAddRestTime = useCallback(() => {
     if (phaseRef.current !== 'rest') return;
-    setRestBoost((prev) => {
-      const next = prev + 15;
-      restBoostRef.current = next;
-      const newRemaining = Math.max(0, tRef.current + 15);
-      tRef.current = newRemaining;
-      setT(newRemaining);
-      return next;
-    });
+    const newRemaining = adjustRestSeconds(tRef.current, 15);
+    tRef.current = newRemaining;
+    setT(newRemaining);
+  }, []);
+
+  // -15 sec for the CURRENT rest only — exact opposite of handleAddRestTime,
+  // clamped at 0 (reaching 0 lets the current rest finish on its next tick).
+  const handleSubRestTime = useCallback(() => {
+    if (phaseRef.current !== 'rest') return;
+    const newRemaining = adjustRestSeconds(tRef.current, -15);
+    tRef.current = newRemaining;
+    setT(newRemaining);
   }, []);
 
   // Key that changes every time we enter a new countdown/exercise to trigger
@@ -981,9 +1032,17 @@ export const WorkoutGuidedSession: React.FC<WorkoutGuidedSessionProps> = ({
 
       {/* ============ REST ============ */}
       {phase === 'rest' && (() => {
-        // Find what's coming next (exercise set)
+        // Find what's coming next: an exercise set OR a stretch (rest between
+        // stretches shows the upcoming stretch, same cohérence as exercises).
         const nextS = allSteps[stepIndex];
-        const nextName = nextS && nextS.kind === 'exercise' ? exercises[nextS.exerciseIndex]?.exerciseName : null;
+        const isStretchRest = !!nextS && nextS.kind === 'stretch';
+        const nextStretch = isStretchRest ? stretches[nextS.stretchIndex] : undefined;
+        const nextName = isStretchRest
+          ? (nextStretch?.name ?? null)
+          : (nextS && nextS.kind === 'exercise' ? exercises[nextS.exerciseIndex]?.exerciseName ?? null : null);
+        const nextStretchSide = isStretchRest && nextStretch
+          ? nextStretch.hasSides ? (nextS!.side === 1 ? 'Côté gauche' : 'Côté droit') : 'Maintien'
+          : '';
         const nextSet = nextS && nextS.kind === 'exercise' ? exercises[nextS.exerciseIndex]?.sets[nextS.setIndex] : null;
         const nextSetNum = nextSet?.setNumber || 0;
         const nextTotalSets = nextS && nextS.kind === 'exercise' ? (exercises[nextS.exerciseIndex]?.sets?.length || 0) : 0;
@@ -1004,7 +1063,16 @@ export const WorkoutGuidedSession: React.FC<WorkoutGuidedSessionProps> = ({
             >
               {formatTime(t)}
             </div>
-            {nextName && (
+            {isStretchRest && nextStretch ? (
+              <div className="space-y-1">
+                <div className="text-[11px] uppercase font-bold text-zinc-400 tracking-widest">Prochain étirement</div>
+                <div className="font-display text-2xl font-bold text-white uppercase">{nextStretch.name}</div>
+                {nextStretchSide && <div className="text-xs font-semibold text-indigo-300">{nextStretchSide}</div>}
+                <div className="text-[10px] uppercase font-bold text-zinc-500">
+                  Étape {Math.min(stepIndex + 1, totalSteps)} / {totalSteps}
+                </div>
+              </div>
+            ) : nextName ? (
               <div className="space-y-1">
                 <div className="text-[11px] uppercase font-bold text-zinc-400 tracking-widest">Prochain exercice</div>
                 {nextExNum > 0 && (
@@ -1015,12 +1083,20 @@ export const WorkoutGuidedSession: React.FC<WorkoutGuidedSessionProps> = ({
                   <div className="text-xs font-semibold text-emerald-300">Série {nextSetNum} / {nextTotalSets}</div>
                 )}
               </div>
-            )}
-            <div className="flex items-center justify-center gap-3">
+            ) : null}
+            <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3">
+              <button
+                id="btn-guided-rest-sub15"
+                onClick={handleSubRestTime}
+                className="px-4 sm:px-5 py-3 rounded-2xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold uppercase tracking-wider transition-colors flex items-center gap-1.5"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                -15 sec
+              </button>
               <button
                 id="btn-guided-rest-add15"
                 onClick={handleAddRestTime}
-                className="px-5 py-3 rounded-2xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold uppercase tracking-wider transition-colors flex items-center gap-1.5"
+                className="px-4 sm:px-5 py-3 rounded-2xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold uppercase tracking-wider transition-colors flex items-center gap-1.5"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
                 +15 sec
@@ -1028,7 +1104,7 @@ export const WorkoutGuidedSession: React.FC<WorkoutGuidedSessionProps> = ({
               <button
                 id="btn-guided-skip-rest"
                 onClick={handleSkipCurrent}
-                className="px-5 py-3 rounded-2xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold uppercase tracking-wider transition-colors flex items-center gap-1.5"
+                className="px-4 sm:px-5 py-3 rounded-2xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold uppercase tracking-wider transition-colors flex items-center gap-1.5"
               >
                 <SkipForward className="w-3.5 h-3.5" />
                 Passer
@@ -1276,7 +1352,7 @@ export const WorkoutGuidedSession: React.FC<WorkoutGuidedSessionProps> = ({
         </div>
       )}
 
-      {interactiveMessage && phase !== 'exercise' && phase !== 'prep' && (
+      {interactiveMessage && phase !== 'exercise' && (
         <p className="text-xs font-semibold text-amber-300 text-center" role="alert">{interactiveMessage}</p>
       )}
     </div>
