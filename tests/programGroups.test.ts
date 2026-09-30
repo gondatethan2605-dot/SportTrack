@@ -39,6 +39,7 @@ const createExerciseConfig = (overrides: Partial<ProgramExerciseConfig> & { name
     groupId: undefined,
     groupType: undefined,
     ...overrides,
+  };
 };
 
 // Helper pour créer un exercice config avec nom personnalisé
@@ -60,7 +61,7 @@ const createExerciseConfigWithName = (name: string, overrides: Partial<ProgramEx
   groupId: undefined,
   groupType: undefined,
   ...overrides,
-};
+});
 
 // Helper pour créer un groupe
 const createGroup = (overrides: Partial<ProgramExerciseGroup> = {}): ProgramExerciseGroup => ({

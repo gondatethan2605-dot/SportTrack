@@ -72,7 +72,7 @@ export const WorkoutShareCard: React.FC<WorkoutShareCardProps> = ({
           height: 80,
           display: 'flex',
           alignItems: 'center',
-          padding: 0 20px,
+          padding: '0 20px',
         }}
       >
         <div style={{ width: 40, height: 40, background: '#7f1d1f', borderRadius: 10, marginRight: 12 }} />
@@ -120,27 +120,24 @@ export const WorkoutShareCard: React.FC<WorkoutShareCardProps> = ({
 
       {/* RPE */}
       {showRPE && averageRPE !== null && rpeCount > 0 && (
-        <div style={{ padding: '0 20px 20px' }}>
-          <div style={{ fontSize: 10, opacity: 0.6, textTransform: 'uppercase' }}>RPE</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 4 }}>
-            <span style={{ fontSize: 12, opacity: 0.8 }}>RPE moyen</span>
-            <div style={{ fontSize: 14, color: '#eab308' }}>{averageRPE?.toFixed(1)} / 10</div>
-            <div style={{ fontSize: 10, opacity: 0.5 }}>{rpeCount} séries</div>
+        <>
+          <div style={{ padding: '0 20px 20px' }}>
+            <div style={{ fontSize: 10, opacity: 0.6, textTransform: 'uppercase' }}>RPE</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 4 }}>
+              <span style={{ fontSize: 12, opacity: 0.8 }}>RPE moyen</span>
+              <div style={{ fontSize: 14, color: '#eab308' }}>{averageRPE?.toFixed(1)} / 10</div>
+              <div style={{ fontSize: 10, opacity: 0.5 }}>{rpeCount} séries</div>
+            </div>
           </div>
-        </div>
-        {rpeCount === 0 && (
-          <div style={{ marginTop: 4, fontSize: 10, opacity: 0.5 }}>
-            Aucun RPE renseigné
-          </div>
-        )}
-        {showRPE && rpeCount > 0 && rpeStats && rpeStats.min !== null && rpeStats.max !== null && (
-          <div style={{ marginTop: 4, fontSize: 10 }}>
-            <span style={{ opacity: 0.6 }}>RPE min</span>
-            <span style={{ marginLeft: 4, color: '#eab308' }}>{rpeStats.min}</span> /
-            <span style={{ marginLeft: 4, color: '#f472b6' }}>{rpeStats.max}</span>
-          </div>
-        )}
-      </div>
+          {showRPE && rpeCount > 0 && rpeStats && rpeStats.min !== null && rpeStats.max !== null && (
+            <div style={{ padding: '0 20px', marginTop: 4, fontSize: 10 }}>
+              <span style={{ opacity: 0.6 }}>RPE min</span>
+              <span style={{ marginLeft: 4, color: '#eab308' }}>{rpeStats.min}</span> /
+              <span style={{ marginLeft: 4, color: '#f472b6' }}>{rpeStats.max}</span>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 };
