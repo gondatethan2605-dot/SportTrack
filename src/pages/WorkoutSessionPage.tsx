@@ -62,6 +62,9 @@ import {
 } from 'lucide-react';
 import { OneRMModal } from '../components/OneRMModal';
 
+const WORKOUT_CARD_WIDTH = 350;
+const WORKOUT_CARD_HEIGHT = 500;
+
 interface WorkoutSessionPageProps {
   availableExercises: Exercise[];
   initialDayName?: string;
@@ -277,7 +280,13 @@ export const WorkoutSessionPage: React.FC<WorkoutSessionPageProps> = ({
       (acc, log) => acc + log.sets.filter((s) => s.completed).length,
       0
     );
-    const volume = sessionExercises.reduce((acc, log) => acc + (log.totalVolumeKg || 0), 0);
+    // Compute volume from completed sets (SessionExerciseLog doesn't have totalVolumeKg)
+    const volume = sessionExercises.reduce((acc, log) => {
+      const logVolume = log.sets
+        .filter((s) => s.completed && s.mode !== 'timer' && s.reps > 0 && s.weightKg > 0)
+        .reduce((sum, s) => sum + s.weightKg * s.reps, 0);
+      return acc + logVolume;
+    }, 0);
     const durationMinutes = Math.round(elapsedSeconds / 60);
     const exercisesCount = sessionExercises.length;
     const date = new Date();
@@ -288,10 +297,12 @@ export const WorkoutSessionPage: React.FC<WorkoutSessionPageProps> = ({
       ? 250 + completedSets * 20 + completedStretchesCount * 25
       : 0;
 
-    // RPE stats
-    const rpeSets = sessionExercises.flatMap((log) => log.sets.filter((s) => s.rpe !== undefined && s.rpe !== null));
-    const averageRPE = rpeSets.length > 0 ? rpeSets.reduce((a, r) => a + r, 0) / rpeSets.length : null;
-    const rpeCount = rpeSets.length;
+    // RPE stats - extract rpe values from WorkoutSet objects
+    const rpeValues = sessionExercises
+      .flatMap((log) => log.sets.filter((s) => s.rpe !== undefined && s.rpe !== null))
+      .map((s) => s.rpe!);
+    const averageRPE = rpeValues.length > 0 ? rpeValues.reduce((a, r) => a + r, 0) / rpeValues.length : null;
+    const rpeCount = rpeValues.length;
 
     // Best exercises
     const bestExercises = sessionExercises
@@ -301,6 +312,10 @@ export const WorkoutSessionPage: React.FC<WorkoutSessionPageProps> = ({
         weight: Math.max(...log.sets.filter((s) => s.completed && s.weightKg > 0).map((s) => s.weightKg), 0),
         reps: Math.max(...log.sets.filter((s) => s.completed && s.reps > 0).map((s) => s.reps), 0),
       }));
+
+    // Export options (match WorkoutShareCard defaults)
+    const showXP = true;
+    const showRPE = true;
 
     // Generate image
     const canvas = document.createElement('canvas');

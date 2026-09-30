@@ -1,6 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { UserProfile, WorkoutSession, PersonalRecord, ExercisePerformance, ExerciseBest, Goal, MuscleGroup, Exercise } from '../types';
 import { computeMuscleGroupVolume, computeMuscleGroupFrequency, computeMuscleGroupTrend, computeMuscleGroupStats, getMuscleGroupExerciseNames, MuscleGroupList, computeAverageRPE, computeRPEStats } from '../utilsStats';
+import { initialExercises } from '../data/initialExercises';
+import { LIBRARY_EXPANSION_EXERCISES } from '../data/libraryExpansion';
 import { computeBadges, nextBadgeToUnlock, mostRecentlyUnlockedBadge } from '../utilsBadges';
 import { computeChallengeProgress, computeWeekKey } from '../utilsChallenges';
 import {
@@ -227,22 +229,21 @@ export const StatsPage: React.FC<StatsPageProps> = ({
     };
   }, [scopedSessions]);
 
-  // LOT E.2 — Selected muscle group for detailed stats.
+// LOT E.2 — Selected muscle group for detailed stats.
   const [selectedMuscleGroup, setSelectedMuscleGroup] = useState<MuscleGroup | null>(null);
 
-  // Exercice ID → Exercise name mapping, built from scoped sessions.
+  // Exercice ID → Exercise (library), built from the exercise library.
   // Required by computeMuscleGroupStats / getMuscleGroupExerciseNames.
   const exercisesById = useMemo(() => {
     const map: Record<string, Exercise> = {};
-    scopedSessions.forEach((s) => {
-      s.exercises.forEach((ex) => {
-        if (ex.exerciseId && !map[ex.exerciseId]) {
-          map[ex.exerciseId] = ex;
-        }
-      });
-    });
+    for (const ex of initialExercises) {
+      if (ex.id && !map[ex.id]) map[ex.id] = ex;
+    }
+    for (const ex of LIBRARY_EXPANSION_EXERCISES) {
+      if (ex.id && !map[ex.id]) map[ex.id] = ex;
+    }
     return map;
-  }, [scopedSessions]);
+  }, []);
 
   // Detailed stats for the selected muscle group (computed from period-filtered sessions).
   const muscleGroupStats = useMemo(() => {
